@@ -437,7 +437,7 @@ def _set_envs_and_config(server_args: ServerArgs):
                 pid,
             )
 
-    signal.signal(signal.SIGCHLD, sigchld_handler)
+    # signal.signal(signal.SIGCHLD, sigchld_handler)
 
     # Register the signal handler.
     # The child processes will send SIGQUIT to this process when any error happens

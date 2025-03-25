@@ -70,6 +70,7 @@ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.utils import (
     configure_logger,
     get_bool_env_var,
+    is_hpu,
     kill_process_tree,
     set_gpu_proc_affinity,
     suppress_other_loggers,
