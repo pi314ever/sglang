@@ -70,6 +70,7 @@ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.utils import (
     configure_logger,
     get_bool_env_var,
+    is_cuda_available,
     is_hpu,
     kill_process_tree,
     set_gpu_proc_affinity,
@@ -350,13 +351,12 @@ def latency_test_run_once(
 
     profiler = None
     if profile:
-        profiler = torch.profiler.profile(
-            activities=[
-                torch.profiler.ProfilerActivity.CPU,
-                torch.profiler.ProfilerActivity.HPU,
-            ],
-            with_stack=True,
-        )
+        activities = [torch.profiler.ProfilerActivity.CPU]
+        if is_hpu():
+            activities.append(torch.profiler.ProfilerActivity.HPU)
+        elif is_cuda_available():
+            activities.append(torch.profiler.ProfilerActivity.CUDA)
+        profiler = torch.profiler.profile(activities=activities, with_stack=True)
         profiler.start()
 
     # Prefill
