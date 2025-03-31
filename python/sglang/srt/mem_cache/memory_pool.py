@@ -67,6 +67,8 @@ class ReqToTokenPool:
         self.free_slots = list(range(size))
 
     def write(self, indices, values):
+        print(self.req_to_token.shape)
+        print(indices, values)
         self.req_to_token[indices] = values
 
     def available_size(self):
