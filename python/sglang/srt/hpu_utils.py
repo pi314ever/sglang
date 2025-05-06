@@ -269,7 +269,9 @@ if _is_hpu:
             req_pool_indices = worker_batch.req_pool_indices.to("cpu").tolist()
             min_req_idx = min(req_pool_indices)
             max_req_idx = max(req_pool_indices)
-            req_to_token_batch = req_token_pool.req_to_token[min_req_idx:max_req_idx+1, :].to("cpu")
+            req_to_token_batch = req_token_pool.req_to_token[
+                min_req_idx : max_req_idx + 1, :
+            ].to("cpu")
             out_cache_loc_cpu = worker_batch.out_cache_loc.to("cpu")
             padded_batch_size = get_decode_batch_bucket(batch_size)
             block_tables = []
@@ -277,7 +279,9 @@ if _is_hpu:
             for i in range(batch_size):
                 num_pages = (seq_len_list[i] + page_size - 1) // page_size
                 num_lots_aligned = num_pages * page_size
-                slots = req_to_token_batch[req_pool_indices[i]-min_req_idx, :num_lots_aligned]
+                slots = req_to_token_batch[
+                    req_pool_indices[i] - min_req_idx, :num_lots_aligned
+                ]
                 pages = (slots // page_size).view(-1, page_size)[:, 0]
                 block_tables.append(pages.flatten().tolist())
                 slots_list.append(slots)
@@ -302,7 +306,9 @@ if _is_hpu:
             extend_pre_len_list = worker_batch.extend_prefix_lens
             out_cache_loc_cpu = worker_batch.out_cache_loc.to("cpu")
             req_pool_indices = worker_batch.req_pool_indices.to("cpu").tolist()
-            req_to_token_batch = req_token_pool.req_to_token[req_pool_indices, :].to("cpu")
+            req_to_token_batch = req_token_pool.req_to_token[req_pool_indices, :].to(
+                "cpu"
+            )
             if sum(extend_pre_len_list) > 0:
                 prefix_padding_len = get_prefill_prefix_seq_len_bucket(
                     sum(extend_pre_len_list), page_size
@@ -316,7 +322,7 @@ if _is_hpu:
             block_tables = []
             for i in range(batch_size):
                 assert extend_pre_len_list[i] % page_size == 0
-                slots = req_to_token_batch[i, :extend_pre_len_list[i]]
+                slots = req_to_token_batch[i, : extend_pre_len_list[i]]
                 pages = (slots // page_size).view(-1, page_size)[:, 0]
                 block_tables.extend(pages.flatten().tolist())
 
