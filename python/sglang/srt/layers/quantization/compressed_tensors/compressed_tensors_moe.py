@@ -22,15 +22,19 @@ from sglang.srt.layers.quantization.utils import (
     all_close_1d,
     is_cuda,
     is_fp8_fnuz,
+    is_hpu,
     per_tensor_dequantize,
     replace_parameter,
 )
 from sglang.srt.utils import set_weight_attrs
 
 _is_cuda = is_cuda()
+_is_hpu = is_hpu()
 
 if _is_cuda:
     from sglang.srt.custom_op import scaled_fp8_quant as sgl_scaled_fp8_quant
+elif _is_hpu:
+    pass
 else:
     from vllm import _custom_ops as vllm_ops
 

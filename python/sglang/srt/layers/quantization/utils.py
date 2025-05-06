@@ -5,12 +5,17 @@ from typing import List, Mapping, Optional, Tuple, Union
 
 import torch
 
-from sglang.srt.utils import is_cuda
+from sglang.srt.utils import is_cuda, is_hpu
 
 _is_cuda = is_cuda()
+_is_hpu = is_hpu()
+
 
 if _is_cuda:
     from sglang.srt.custom_op import scaled_fp8_quant as sgl_scaled_fp8_quant
+elif _is_hpu:
+    # hpu fp8 quantization is not implemented yet
+    pass
 else:
     from vllm import _custom_ops as vllm_ops
 

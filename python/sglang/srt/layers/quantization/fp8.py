@@ -61,6 +61,7 @@ from sglang.srt.utils import (
     get_bool_env_var,
     is_cuda,
     is_hip,
+    is_hpu,
     permute_weight,
     print_warning_once,
     set_weight_attrs,
@@ -76,9 +77,12 @@ if _is_hip:
     from aiter.ops.shuffle import shuffle_weight
 
 _is_cuda = is_cuda()
+_is_hpu = is_hpu()
 
 if _is_cuda:
     from sglang.srt.custom_op import scaled_fp8_quant as sgl_scaled_fp8_quant
+elif _is_hpu:
+    pass
 else:
     from vllm import _custom_ops as vllm_ops
 

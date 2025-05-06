@@ -8,11 +8,14 @@ import torch
 import torch.nn as nn
 
 from sglang.srt.custom_op import CustomOp
-from sglang.srt.utils import is_cuda_available
+from sglang.srt.utils import is_cuda_available, is_hpu
 
 _is_cuda_available = is_cuda_available()
+_is_hpu = is_hpu()
 if _is_cuda_available:
     from sgl_kernel import apply_rope_with_cos_sin_cache_inplace
+elif _is_hpu:
+    pass
 else:
     from vllm import _custom_ops as ops
 

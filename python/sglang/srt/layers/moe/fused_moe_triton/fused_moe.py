@@ -19,9 +19,11 @@ from sglang.srt.utils import (
     get_device_name,
     is_cuda,
     is_hip,
+    is_hpu,
 )
 
 _is_hip = is_hip()
+_is_hpu = is_hpu()
 
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,8 @@ if _is_cuda:
     from sgl_kernel import gelu_and_mul, silu_and_mul
 
     from sglang.srt.custom_op import scaled_fp8_quant as sgl_scaled_fp8_quant
+elif _is_hpu:
+    pass
 else:
     from vllm import _custom_ops as vllm_ops
 

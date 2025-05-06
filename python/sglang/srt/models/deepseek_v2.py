@@ -73,15 +73,18 @@ from sglang.srt.managers.expert_distribution import ExpertDistributionRecorder
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.model_loader.weight_utils import default_weight_loader
-from sglang.srt.utils import DeepEPMode, add_prefix, is_cuda, is_hip
+from sglang.srt.utils import DeepEPMode, add_prefix, is_cuda, is_hip, is_hpu
 
 _is_hip = is_hip()
 _is_cuda = is_cuda()
+_is_hpu = is_hpu()
 
 if _is_cuda:
     from sgl_kernel import awq_dequantize, bmm_fp8, merge_state_v2
 
     from sglang.srt.layers.moe.ep_moe.token_dispatcher import DeepEPDispatcher
+elif _is_hpu:
+    pass
 else:
     from vllm import _custom_ops as ops
 
