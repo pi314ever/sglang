@@ -1,6 +1,7 @@
 # Adapted from https://raw.githubusercontent.com/vllm-project/vllm/refs/tags/v0.6.6.post1/vllm/model_executor/layers/rotary_embedding.py
 
 """Rotary Positional Embeddings."""
+
 import math
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -8,9 +9,10 @@ import torch
 import torch.nn as nn
 
 from sglang.srt.custom_op import CustomOp
-from sglang.srt.utils import is_cuda
+from sglang.srt.utils import is_cuda, is_hpu
 
 _is_cuda = is_cuda()
+_is_hpu = is_hpu()
 
 if _is_cuda:
     from sgl_kernel import apply_rope_with_cos_sin_cache_inplace
@@ -754,7 +756,6 @@ class DeepseekScalingRotaryEmbedding(RotaryEmbedding):
 
 
 class Llama3RotaryEmbedding(RotaryEmbedding):
-
     def __init__(
         self,
         head_size: int,
@@ -801,7 +802,6 @@ class Llama3RotaryEmbedding(RotaryEmbedding):
 
 
 class Llama4VisionRotaryEmbedding(RotaryEmbedding):
-
     def __init__(
         self,
         head_size: int,
@@ -840,10 +840,64 @@ class Llama4VisionRotaryEmbedding(RotaryEmbedding):
         ).repeat_interleave(2, dim=-1)
         freqs = torch.cat([freqs_x, freqs_y], dim=-1).float().contiguous()[..., ::2]
         freqs = freqs.masked_fill(img_idx.reshape(-1, 1, 1) < 0, 0)
+
+        # HPU does not support complex tensors
+        if _is_hpu:
+            cache = torch.concat([torch.cos(freqs), torch.sin(freqs)], dim=-1)
+            return cache
         cache = torch.view_as_complex(
             torch.stack([torch.cos(freqs), torch.sin(freqs)], dim=-1)
         )
         return cache
+
+    def forward_hpu(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        print("Llama4VisonRotaryEmbedding forward hpu")
+        self.cos_sin_cache = self.cos_sin_cache.to(query.device)
+        cos_cache, sin_cache = self.cos_sin_cache.chunk(2, dim=-1)
+        # shape: [577, 1, 44]
+        # print(f"[DENBUG] cos_cache.shape: {cos_cache.shape}, sin_cache.shape: {sin_cache.shape}")
+
+        query_2d = query.float().reshape(*query.shape[:-1], -1, 2)
+        key_2d = key.float().reshape(*key.shape[:-1], -1, 2)
+        # e.g., [17, 577, 8, 44, 2]
+        # print(f'[DEBUG] query_2d.shape: {query_2d.shape}, key_2d.shape: {key_2d.shape}')
+
+        # Reshape cos_cache and sin_cache to broadcast properly.
+        # We want them to have shape [1, 577, 1, 44] to match the query dimensions (except for the last two dims).
+        cos_cache = cos_cache.view(1, cos_cache.shape[0], 1, cos_cache.shape[-1])
+        sin_cache = sin_cache.view(1, sin_cache.shape[0], 1, sin_cache.shape[-1])
+        # e.g., [1, 577, 1, 44]
+
+        # Separate the real and imaginary parts.
+        q_real, q_imag = query_2d.unbind(-1)  # each: [17, 577, 8, 44]
+        k_real, k_imag = key_2d.unbind(-1)  # each: [17, 577, 8, 44]
+
+        # Manually apply the complex multiplication (rotation) using the trigonometric identities.
+        # For a complex multiplication: (a+ib)*(c+id) = (ac - bd) + i(ad + bc)
+        q_rotated_real = q_real * cos_cache - q_imag * sin_cache
+        q_rotated_imag = q_real * sin_cache + q_imag * cos_cache
+
+        k_rotated_real = k_real * cos_cache - k_imag * sin_cache
+        k_rotated_imag = k_real * sin_cache + k_imag * cos_cache
+
+        # Re-stack the rotated components into a last dimension of size 2.
+        q_rotated = torch.stack(
+            [q_rotated_real, q_rotated_imag], dim=-1
+        )  # shape: [17, 577, 8, 44, 2]
+        k_rotated = torch.stack(
+            [k_rotated_real, k_rotated_imag], dim=-1
+        )  # shape: [17, 577, 8, 44, 2]
+
+        # Flatten the last two dimensions to match the original output shape.
+        # Flatten back to the desired shape (e.g., collapse the last two dimensions).
+        query_out = q_rotated.flatten(3)
+        key_out = k_rotated.flatten(3)
+
+        return query_out.type_as(query), key_out.type_as(key)
 
     def forward(
         self,
@@ -1357,9 +1411,9 @@ def get_rope_cpu(
 
     assert rope_scaling is not None
     scaling_type = rope_scaling["rope_type"]
-    assert (
-        scaling_type == "deepseek_yarn"
-    ), "Only deepseek_yarn is supported for CPU for now"
+    assert scaling_type == "deepseek_yarn", (
+        "Only deepseek_yarn is supported for CPU for now"
+    )
 
     scaling_factor = rope_scaling["factor"]
     original_max_position = rope_scaling["original_max_position_embeddings"]
