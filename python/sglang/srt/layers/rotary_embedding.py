@@ -9,10 +9,9 @@ import torch
 import torch.nn as nn
 
 from sglang.srt.custom_op import CustomOp
-from sglang.srt.utils import is_cuda, is_hpu
+from sglang.srt.utils import is_cuda
 
 _is_cuda = is_cuda()
-_is_hpu = is_hpu()
 
 if _is_cuda:
     from sgl_kernel import apply_rope_with_cos_sin_cache_inplace
