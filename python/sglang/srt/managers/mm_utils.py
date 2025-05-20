@@ -16,9 +16,11 @@ from sglang.srt.managers.schedule_batch import (
     global_server_args_dict,
 )
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.utils import flatten_nested_list, print_warning_once
+from sglang.srt.utils import flatten_nested_list, is_hpu, print_warning_once
 
 logger = logging.getLogger(__name__)
+
+_is_hpu = is_hpu()
 
 
 class MultiModalityDataPaddingPattern:
@@ -463,7 +465,11 @@ def general_mm_embed_routine(
         )
         # once used, mm_inputs is useless, considering chunked-prefill is disabled for multimodal models
         # just being defensive here
-        forward_batch.mm_inputs = None
+        if _is_hpu:
+            # NOTE: HPU uses namedtuples, which need to _replace instead of assigning.
+            forward_batch = forward_batch._replace(mm_inputs=None)
+        else:
+            forward_batch.mm_inputs = None
     else:
         inputs_embeds = embed_tokens(input_ids)
 
