@@ -21,7 +21,7 @@ import os
 import time
 from collections import namedtuple
 from contextlib import contextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 import tqdm
@@ -31,6 +31,7 @@ from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.layers.pooler import EmbeddingPoolerOutput
 from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
 from sglang.srt.managers.mm_utils import MultimodalInputs
+from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
 from sglang.srt.model_executor.forward_batch_info import (
     CaptureHiddenMode,
     ForwardBatch,
@@ -129,6 +130,12 @@ HPUForwardBatchBase = namedtuple(
 HPUMultimodalInputs = namedtuple(
     "HPUMultimodalInputs",
     [field.name for field in MultimodalInputs.__dataclass_fields__.values()],
+    defaults=[None] * 12,
+)
+
+HPUMultimodalDataItemBase = namedtuple(
+    "HPUMultimodalDataItem",
+    [field.name for field in MultimodalDataItem.__dataclass_fields__.values()],
 )
 
 
@@ -147,6 +154,83 @@ def set_hpu_torch_compile_config():
     torch._dynamo.config.accumulated_cache_size_limit = 8192
     if hasattr(torch._dynamo.config, "cache_size_limit"):
         torch._dynamo.config.cache_size_limit = 8192
+
+
+class HPUMultimodalDataItem(HPUMultimodalDataItemBase):
+    def is_audio(self):
+        return (
+            self.modality == Modality.AUDIO
+        ) and not MultimodalDataItem.is_empty_list(self.audio_features)
+
+    def is_image(self):
+        return (
+            self.modality == Modality.IMAGE or self.modality == Modality.MULTI_IMAGES
+        ) and not MultimodalDataItem.is_empty_list(self.pixel_values)
+
+    def is_video(self):
+        return (
+            self.modality == Modality.VIDEO
+        ) and not MultimodalDataItem.is_empty_list(self.pixel_values)
+
+    def is_valid(self) -> bool:
+        return self.is_image() or self.is_video() or self.is_audio()
+
+
+def maybe_to_hpu(input):
+    if isinstance(input, torch.Tensor):
+        return input.to("hpu")
+    return input
+
+
+def create_hpu_mm_inputs(forward_batch: ForwardBatch) -> HPUMultimodalInputs:
+    mm_inputs = forward_batch.merge_mm_inputs()
+    assert mm_inputs is not None, "Expected multimodal inputs"
+    assert len(mm_inputs.mm_items) == 1, "Expected merged multimodal items"
+    data_item = mm_inputs.mm_items[0]
+    mm_items = [
+        HPUMultimodalDataItem(
+            modality=data_item.modality,
+            hash=data_item.hash,
+            pad_value=data_item.pad_value,
+            aspect_ratio_id=maybe_to_hpu(data_item.aspect_ratio_id),
+            aspect_ratio_mask=maybe_to_hpu(data_item.aspect_ratio_mask),
+            image_sizes=data_item.image_sizes,
+            image_offsets=data_item.image_offsets,
+            pixel_values=maybe_to_hpu(data_item.pixel_values),
+            image_grid_thws=maybe_to_hpu(data_item.image_grid_thws),
+            video_grid_thws=maybe_to_hpu(data_item.video_grid_thws),
+            image_emb_mask=maybe_to_hpu(data_item.image_emb_mask),
+            image_spatial_crop=maybe_to_hpu(data_item.image_spatial_crop),
+            second_per_grid_ts=(
+                list(maybe_to_hpu(item) for item in data_item.second_per_grid_ts)
+                if data_item.second_per_grid_ts is not None
+                else None
+            ),
+            tgt_size=data_item.tgt_size,
+            audio_features=maybe_to_hpu(data_item.audio_features),
+            audio_feature_lens=(
+                list(maybe_to_hpu(item) for item in data_item.audio_feature_lens)
+                if data_item.audio_feature_lens is not None
+                else None
+            ),
+        )
+    ]
+
+    return HPUMultimodalInputs(
+        mm_items=mm_items,
+        image_pad_len=mm_inputs.image_pad_len,
+        num_image_tokens=mm_inputs.num_image_tokens,
+        mrope_positions=maybe_to_hpu(mm_inputs.mrope_positions),
+        mrope_position_delta=maybe_to_hpu(mm_inputs.mrope_position_delta),
+        im_token_id=mm_inputs.im_token_id,
+        im_start_id=mm_inputs.im_start_id,
+        im_end_id=mm_inputs.im_end_id,
+        slice_start_id=mm_inputs.slice_start_id,
+        slice_end_id=mm_inputs.slice_end_id,
+        video_token_id=mm_inputs.video_token_id,
+        audio_start_id=maybe_to_hpu(mm_inputs.audio_start_id),
+        audio_end_id=maybe_to_hpu(mm_inputs.audio_end_id),
+    )
 
 
 def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRunner):
@@ -233,9 +317,8 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
     if forward_batch.contains_mm_inputs():
         if forward_batch.contains_audio_inputs():
             raise NotImplementedError(f"Audio inputs are not supported yet")
+        mm_inputs = create_hpu_mm_inputs(forward_batch)
 
-        mm_inputs = forward_batch.merge_mm_inputs()
-        mm_inputs = HPUMultimodalInputs(**mm_inputs.__dict__)
     else:
         mm_inputs = None
 
