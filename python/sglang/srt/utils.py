@@ -653,7 +653,7 @@ def load_image(
     elif image_file.startswith("http://") or image_file.startswith("https://"):
         timeout = int(os.getenv("REQUEST_TIMEOUT", "3"))
         response = requests.get(image_file, stream=True, timeout=timeout).raw
-        image = Image.open(response)
+        image = Image.open(BytesIO(response.data))
         response.close()
     elif image_file.lower().endswith(("png", "jpg", "jpeg", "webp", "gif")):
         image = Image.open(image_file)

@@ -13,7 +13,9 @@ from PIL import Image
 from transformers import BaseImageProcessorFast
 
 from sglang.srt.managers.schedule_batch import Modality
-from sglang.srt.utils import encode_video, load_audio, load_image
+from sglang.srt.utils import encode_video, is_hpu, load_audio, load_image
+
+_is_hpu = is_hpu()
 
 
 @dataclasses.dataclass
@@ -80,8 +82,10 @@ class BaseMultimodalProcessor(ABC):
             kwargs["audios"] = audios
 
         processor = self._processor
-        if hasattr(processor, "image_processor") and isinstance(
-            processor.image_processor, BaseImageProcessorFast
+        if (
+            hasattr(processor, "image_processor")
+            and isinstance(processor.image_processor, BaseImageProcessorFast)
+            and not _is_hpu
         ):
             kwargs["device"] = "cuda"
         result = processor.__call__(
