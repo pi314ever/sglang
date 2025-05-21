@@ -76,42 +76,48 @@ class Llama4VisionRotaryEmbedding(RotaryEmbedding):
         cache = torch.concat([cos_vals, sin_vals], dim=-1)
         return cache
 
-    def forward(
-        self, query: torch.Tensor, key: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Ensure the cache is on the right device.
-        self.cos_sin_cache = self.cos_sin_cache.to(query.device)
-        cos_cache, sin_cache = self.cos_sin_cache.chunk(2, dim=-1)
+    def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.cos_sin_cache.to(hidden_states.device)
 
-        query_2d = query.float().reshape(*query.shape[:-1], -1, 2)
-        key_2d = key.float().reshape(*key.shape[:-1], -1, 2)
 
-        # Reshape cos_cache and sin_cache to broadcast properly.
-        cos_cache = cos_cache.view(1, cos_cache.shape[0], 1, cos_cache.shape[-1])
-        sin_cache = sin_cache.view(1, sin_cache.shape[0], 1, sin_cache.shape[-1])
+def vision_apply_rotary_emb(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    freqs_ci: torch.Tensor,
+):
+    # Ensure the cache is on the right device.
+    cos_sin_cache = freqs_ci.to(query.device)
+    cos_cache, sin_cache = cos_sin_cache.chunk(2, dim=-1)
 
-        # Separate the real and imaginary parts.
-        q_real, q_imag = query_2d.unbind(-1)  # each: [17, 577, 8, 44]
-        k_real, k_imag = key_2d.unbind(-1)  # each: [17, 577, 8, 44]
+    query_2d = query.float().reshape(*query.shape[:-1], -1, 2)
+    key_2d = key.float().reshape(*key.shape[:-1], -1, 2)
 
-        # Manually apply the complex multiplication (rotation) using the trigonometric identities.
-        # For a complex multiplication: (a+ib)*(c+id) = (ac - bd) + i(ad + bc)
-        q_rotated_real = q_real * cos_cache - q_imag * sin_cache
-        q_rotated_imag = q_real * sin_cache + q_imag * cos_cache
+    # Reshape cos_cache and sin_cache to broadcast properly.
+    cos_cache = cos_cache.view(1, cos_cache.shape[0], 1, cos_cache.shape[-1])
+    sin_cache = sin_cache.view(1, sin_cache.shape[0], 1, sin_cache.shape[-1])
 
-        k_rotated_real = k_real * cos_cache - k_imag * sin_cache
-        k_rotated_imag = k_real * sin_cache + k_imag * cos_cache
+    # Separate the real and imaginary parts.
+    q_real, q_imag = query_2d.unbind(-1)  # each: [17, 577, 8, 44]
+    k_real, k_imag = key_2d.unbind(-1)  # each: [17, 577, 8, 44]
 
-        # Re-stack the rotated components into a last dimension of size 2.
-        q_rotated = torch.stack([q_rotated_real, q_rotated_imag], dim=-1)
-        k_rotated = torch.stack([k_rotated_real, k_rotated_imag], dim=-1)
+    # Manually apply the complex multiplication (rotation) using the trigonometric identities.
+    # For a complex multiplication: (a+ib)*(c+id) = (ac - bd) + i(ad + bc)
+    q_rotated_real = q_real * cos_cache - q_imag * sin_cache
+    q_rotated_imag = q_real * sin_cache + q_imag * cos_cache
 
-        # Flatten the last two dimensions to match the original output shape.
-        # Flatten back to the desired shape (e.g., collapse the last two dimensions).
-        query_out = q_rotated.flatten(3)
-        key_out = k_rotated.flatten(3)
+    k_rotated_real = k_real * cos_cache - k_imag * sin_cache
+    k_rotated_imag = k_real * sin_cache + k_imag * cos_cache
 
-        return query_out.type_as(query), key_out.type_as(key)
+    # Re-stack the rotated components into a last dimension of size 2.
+    q_rotated = torch.stack([q_rotated_real, q_rotated_imag], dim=-1)
+    k_rotated = torch.stack([k_rotated_real, k_rotated_imag], dim=-1)
+
+    # Flatten the last two dimensions to match the original output shape.
+    # Flatten back to the desired shape (e.g., collapse the last two dimensions).
+    query_out = q_rotated.flatten(3)
+    key_out = k_rotated.flatten(3)
+
+    return query_out.type_as(query), key_out.type_as(key)
 
 
 if _is_hpu:
@@ -120,6 +126,9 @@ if _is_hpu:
     # Monkey patch the Llama4VisionRotaryEmbedding class
     transformers.models.llama4.modeling_llama4.Llama4VisionRotaryEmbedding = (
         Llama4VisionRotaryEmbedding
+    )
+    transformers.models.llama4.modeling_llama4.vision_apply_rotary_emb = (
+        vision_apply_rotary_emb
     )
 
 
