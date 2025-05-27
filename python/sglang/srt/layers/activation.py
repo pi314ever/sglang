@@ -28,7 +28,7 @@ from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
 )
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
-from sglang.srt.utils import is_cuda, set_weight_attrs, is_hpu
+from sglang.srt.utils import is_cuda, is_hpu, set_weight_attrs
 
 _is_cuda = is_cuda()
 _is_hpu = is_hpu()

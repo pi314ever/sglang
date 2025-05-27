@@ -88,8 +88,8 @@ from sglang.srt.utils import (
     get_int_env_var,
     is_cuda,
     is_hip,
-    log_info_on_rank0,
     is_hpu,
+    log_info_on_rank0,
 )
 
 _is_hip = is_hip()
@@ -99,10 +99,10 @@ _is_hpu = is_hpu()
 if _is_cuda:
     from sgl_kernel import awq_dequantize, bmm_fp8, merge_state_v2
 
+    from sglang.srt.layers.moe.ep_moe.token_dispatcher import DeepEPDispatcher
     from sglang.srt.layers.quantization.deep_gemm import (
         grouped_gemm_nt_f8f8bf16_masked as deep_gemm_grouped_gemm_nt_f8f8bf16_masked,
     )
-    from sglang.srt.layers.moe.ep_moe.token_dispatcher import DeepEPDispatcher
 elif _is_hpu:
     pass
 else:

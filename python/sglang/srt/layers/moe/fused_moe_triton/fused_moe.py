@@ -29,8 +29,8 @@ from sglang.srt.utils import (
     get_device_name,
     is_cuda,
     is_hip,
-    log_info_on_rank0,
     is_hpu,
+    log_info_on_rank0,
 )
 
 _is_hip = is_hip()

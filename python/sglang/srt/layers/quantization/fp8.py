@@ -66,8 +66,8 @@ from sglang.srt.utils import (
     get_bool_env_var,
     is_cuda,
     is_hip,
-    log_info_on_rank0,
     is_hpu,
+    log_info_on_rank0,
     print_warning_once,
     set_weight_attrs,
 )
