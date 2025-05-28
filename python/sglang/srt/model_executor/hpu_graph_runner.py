@@ -105,6 +105,7 @@ class HPUForwardBatch(HPUForwardBatchBase):
     def merge_mm_inputs(self):
         return self.mm_inputs
 
+
 def set_hpu_torch_compile_config():
     import torch._dynamo.config
 
