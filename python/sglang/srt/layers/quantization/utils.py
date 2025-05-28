@@ -12,7 +12,7 @@ _is_cuda = is_cuda()
 _is_hpu = is_hpu()
 
 
-if not _is_cuda or not _is_hpu:
+if not _is_cuda and not _is_hpu:
     from vllm._custom_ops import scaled_fp8_quant
 
 
