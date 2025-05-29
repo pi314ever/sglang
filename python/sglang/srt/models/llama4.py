@@ -52,14 +52,21 @@ from sglang.srt.model_executor.forward_batch_info import (
     PPProxyTensors,
 )
 from sglang.srt.models.llama import LlamaForCausalLM, LlamaMLP
-from sglang.srt.utils import add_prefix, fast_topk, get_compiler_backend, make_layers
+from sglang.srt.utils import (
+    add_prefix,
+    fast_topk,
+    get_compiler_backend,
+    is_hpu,
+    make_layers,
+)
 
+_is_hpu = is_hpu()
 logger = logging.getLogger(__name__)
 
 
 class Llama4MoE(nn.Module):
 
-    @torch.compile(dynamic=True, backend=get_compiler_backend())
+    @torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_hpu)
     @staticmethod
     def custom_routing_function(
         hidden_states: torch.Tensor,
@@ -287,7 +294,7 @@ class Llama4Attention(nn.Module):
         attn_scale = torch.log(floor + 1.0) * self.attn_scale + 1.0
         return attn_scale.unsqueeze(-1)
 
-    @torch.compile(dynamic=True, backend=get_compiler_backend())
+    @torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_hpu)
     def _mul_attn_scale(self, positions, q):
         attn_scale = self._get_attn_scale(positions)
         return (q * attn_scale).to(q.dtype)
@@ -305,7 +312,11 @@ class Llama4Attention(nn.Module):
         if self.rotary_emb is not None:
             q_view, k_view = qk.split([self.q_size, self.kv_size], dim=-1)
             q_out_unused, k_out_unused = self.rotary_emb(positions, q_view, k_view)
-            del q_view, k_view, q_out_unused, k_out_unused
+            if (q_out_unused is q_view) and (k_out_unused is k_view):
+                del q_view, k_view, q_out_unused, k_out_unused
+                qk = qk
+            else:
+                qk = torch.cat([q_out_unused, k_out_unused], dim=-1)
 
         if self.qk_norm is not None:
             # TODO there are still 2 redundant direct_copy_kernel_cuda for this `reshape` and (in attn backend) q.contiguous(), maybe we can fuse them later

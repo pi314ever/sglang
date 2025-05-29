@@ -30,6 +30,7 @@ from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.layers.pooler import EmbeddingPoolerOutput
 from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
+from sglang.srt.managers.mm_utils import MultimodalInputs
 from sglang.srt.model_executor.forward_batch_info import (
     CaptureHiddenMode,
     ForwardBatch,
@@ -60,7 +61,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-HPUForwardBatch = namedtuple(
+HPUForwardBatchBase = namedtuple(
     "HPUForwardBatch",
     [
         "forward_mode",
@@ -81,6 +82,7 @@ HPUForwardBatch = namedtuple(
         "attn_backend",
         "token_to_kv_pool",
         "use_contiguous_pa",
+        "mm_inputs",
         "input_embeds",
         "extend_return_logprob",
         "padded_static_len",
@@ -88,6 +90,20 @@ HPUForwardBatch = namedtuple(
     ],
     defaults=[None, False, -1, CaptureHiddenMode.NULL],
 )
+
+HPUMultimodalInputs = namedtuple(
+    "HPUMultimodalInputs",
+    [field.name for field in MultimodalInputs.__dataclass_fields__.values()],
+)
+
+
+class HPUForwardBatch(HPUForwardBatchBase):
+
+    def contains_mm_inputs(self):
+        return self.mm_inputs is not None
+
+    def merge_mm_inputs(self):
+        return self.mm_inputs
 
 
 def set_hpu_torch_compile_config():
@@ -156,6 +172,15 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         block_usage = forward_batch.hpu_metadata.block_usage.to("hpu")
         use_contiguous_pa = forward_batch.hpu_metadata.use_contiguous_pa
 
+    if forward_batch.contains_mm_inputs():
+        if forward_batch.contains_audio_inputs():
+            raise NotImplementedError(f"Audio inputs are not supported yet")
+
+        mm_inputs = forward_batch.merge_mm_inputs()
+        mm_inputs = HPUMultimodalInputs(**mm_inputs.__dict__)
+    else:
+        mm_inputs = None
+
     return HPUForwardBatch(
         forward_mode=forward_batch.forward_mode,
         batch_size=batch_size,
@@ -175,6 +200,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         attn_backend=forward_batch.attn_backend,
         token_to_kv_pool=forward_batch.token_to_kv_pool,
         use_contiguous_pa=use_contiguous_pa,
+        mm_inputs=mm_inputs,
     )
 
 
@@ -204,6 +230,7 @@ def create_hpu_dummy_batch_prefill(
         attn_backend=attn_backend,
         token_to_kv_pool=token_to_kv_pool,
         use_contiguous_pa=None,
+        mm_inputs=None,
     )
 
 
@@ -229,6 +256,7 @@ def create_hpu_dummy_batch_decode(
         attn_backend=attn_backend,
         token_to_kv_pool=token_to_kv_pool,
         use_contiguous_pa=USE_CONTIGUOUS_PA,
+        mm_inputs=None,
     )
 
 
