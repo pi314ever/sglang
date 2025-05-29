@@ -96,7 +96,14 @@ class GuidanceGrammar(BaseGrammarObject):
 
     @staticmethod
     def apply_vocab_mask(logits: torch.Tensor, vocab_mask: torch.Tensor) -> None:
-        apply_token_bitmask_inplace(logits, vocab_mask)
+        if logits.device.type == "hpu":
+            logits_cpu = logits.to("cpu")
+            vocab_mask_cpu = vocab_mask.to("cpu")
+            apply_token_bitmask_inplace(logits_cpu, vocab_mask_cpu)
+            # Copy the results back to the original tensors (in-place modification)
+            logits.copy_(logits_cpu.to(logits.device))
+        else:
+            apply_token_bitmask_inplace(logits, vocab_mask)
 
     def copy(self):
         return GuidanceGrammar(

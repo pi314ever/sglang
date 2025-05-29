@@ -34,6 +34,7 @@ from sglang.srt.constrained.base_grammar_backend import (
 from sglang.srt.constrained.triton_ops.bitmask_ops import (
     apply_token_bitmask_inplace_triton,
 )
+from sglang.srt.utils import get_bool_env_var
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,12 @@ class XGrammarGrammar(BaseGrammarObject):
             apply_token_bitmask_inplace_triton(logits, vocab_mask)
         elif logits.device.type == "cpu" and self.apply_vocab_mask_cpu:
             self.apply_vocab_mask_cpu(logits, vocab_mask)
+        elif logits.device.type == "hpu" and self.apply_vocab_mask_cpu:
+            logits_cpu = logits.to("cpu")
+            vocab_mask_cpu = vocab_mask.to("cpu")
+            self.apply_vocab_mask_cpu(logits_cpu, vocab_mask_cpu)
+            # Copy the results back to the original tensors (in-place modification)
+            logits.copy_(logits_cpu.to(logits.device))
         else:
             raise RuntimeError(f"Unsupported device: {logits.device.type}")
 
