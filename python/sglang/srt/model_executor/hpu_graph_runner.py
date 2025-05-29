@@ -308,7 +308,22 @@ class HPUGraphRunner:
             set_hpu_torch_compile_config()
             self.regional_compilation_layers_list = [RMSNorm, VocabParallelEmbedding]
             self.model = HPUAdapter(self.model_runner.model, self.model_runner.dtype)
-            self._regional_compilation(self.model)
+            compile_level = self.model_runner.server_args.regional_compile_level
+            if compile_level == 0:  # root
+                self.model = torch.compile(
+                    self.model, backend="hpu_backend", dynamic=False
+                )
+                logger.info("Compiled the full model with torch.compile")
+            elif compile_level == 1:  # 1 level below the root in tree
+                self._regional_compilation(self.model)
+                logger.info(
+                    "Compiled all nodes 1 level below the root with torch.compile (regional mode)"
+                )
+            else:  # 2 levels below the root in tree
+                self._compile_leaf_modules(self.model)
+                logger.info(
+                    "Compiled all leaf modules with torch.compile (regional mode)"
+                )
         else:
             self.model = HPUAdapter(self.model_runner.model, self.model_runner.dtype)
             logger.info("Running on Eager mode.")
@@ -331,16 +346,40 @@ class HPUGraphRunner:
                 raise Exception(f"Capture hpu graph failed: {e}\n")
 
     def _regional_compilation(self, module, parent_module=None, module_name=None):
-        if isinstance(module, torch.nn.ModuleList):
-            for children_name, children_module in module.named_children():
-                self._compile_region(module, children_name, children_module)
-        elif any(
+        if any(
             isinstance(module, layer) for layer in self.regional_compilation_layers_list
         ):
-            self._compile_region(parent_module, module_name, module)
+            if parent_module is not None:
+                self._compile_region(parent_module, module_name, module)
+
+        elif isinstance(module, torch.nn.ModuleList):
+            for child_name, child_module in module.named_children():
+                for submodule_name, submodule in child_module.named_children():
+                    self._compile_region(child_module, submodule_name, submodule)
         else:
             for children_name, children_module in module.named_children():
                 self._regional_compilation(children_module, module, children_name)
+
+    # TODO: Combine this function and `_regional_compilation` into one function using a simpler Level Order Traversal algorithm
+    def _compile_leaf_modules(self, module, parent_module=None, module_name=None):
+        """Recursively compile individual leaf modules while preserving module structure (op_level)."""
+        if isinstance(module, (torch.nn.ModuleList, torch.nn.Sequential)):
+            for name, child in module.named_children():
+                self._regional_compilation_op_level(child, module, name)
+            return
+
+        if len(list(module.children())) == 0:
+            logger.info(f"Compiling leaf module: {module_name}")
+            compiled_module = torch.compile(
+                module, backend="hpu_backend", dynamic=False
+            )
+            if parent_module is not None and module_name is not None:
+                setattr(parent_module, module_name, compiled_module)
+            return
+
+        # For non-leaf modules, recursively compile children first
+        for name, child in module.named_children():
+            self._regional_compilation_op_level(child, module, name)
 
     def _compile_region(self, model, name, module):
         module = torch.compile(module, backend="hpu_backend", dynamic=False)

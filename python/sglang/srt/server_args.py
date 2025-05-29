@@ -167,6 +167,7 @@ class ServerArgs:
     enable_deepep_moe: bool = False
     deepep_mode: Optional[Literal["auto", "normal", "low_latency"]] = "auto"
     enable_torch_compile: bool = False
+    regional_compile_level: int = 1
     torch_compile_max_bs: int = 32
     cuda_graph_max_bs: Optional[int] = None
     cuda_graph_bs: Optional[List[int]] = None
@@ -1116,6 +1117,13 @@ class ServerArgs:
             "--enable-torch-compile",
             action="store_true",
             help="Optimize the model with torch.compile. Experimental feature.",
+        )
+        parser.add_argument(
+            "--regional-compile-level",
+            type=int,
+            choices=[0, 1, 2],
+            default=ServerArgs.regional_compile_level,
+            help="Set the regional compile level when using torch compile. 0: root level, 1: one level below root, 2: two levels below root.",
         )
         parser.add_argument(
             "--torch-compile-max-bs",
