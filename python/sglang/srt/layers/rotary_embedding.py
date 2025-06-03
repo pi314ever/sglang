@@ -945,26 +945,20 @@ class Llama4VisionRotaryEmbedding(RotaryEmbedding):
         query: torch.Tensor,
         key: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        print("Llama4VisonRotaryEmbedding forward hpu")
         self.cos_sin_cache = self.cos_sin_cache.to(query.device)
         cos_cache, sin_cache = self.cos_sin_cache.chunk(2, dim=-1)
-        # shape: [577, 1, 44]
-        # print(f"[DENBUG] cos_cache.shape: {cos_cache.shape}, sin_cache.shape: {sin_cache.shape}")
 
         query_2d = query.float().reshape(*query.shape[:-1], -1, 2)
         key_2d = key.float().reshape(*key.shape[:-1], -1, 2)
-        # e.g., [17, 577, 8, 44, 2]
-        # print(f'[DEBUG] query_2d.shape: {query_2d.shape}, key_2d.shape: {key_2d.shape}')
 
         # Reshape cos_cache and sin_cache to broadcast properly.
         # We want them to have shape [1, 577, 1, 44] to match the query dimensions (except for the last two dims).
         cos_cache = cos_cache.view(1, cos_cache.shape[0], 1, cos_cache.shape[-1])
         sin_cache = sin_cache.view(1, sin_cache.shape[0], 1, sin_cache.shape[-1])
-        # e.g., [1, 577, 1, 44]
 
         # Separate the real and imaginary parts.
-        q_real, q_imag = query_2d.unbind(-1)  # each: [17, 577, 8, 44]
-        k_real, k_imag = key_2d.unbind(-1)  # each: [17, 577, 8, 44]
+        q_real, q_imag = query_2d.unbind(-1)
+        k_real, k_imag = key_2d.unbind(-1)
 
         # Manually apply the complex multiplication (rotation) using the trigonometric identities.
         # For a complex multiplication: (a+ib)*(c+id) = (ac - bd) + i(ad + bc)
@@ -975,12 +969,8 @@ class Llama4VisionRotaryEmbedding(RotaryEmbedding):
         k_rotated_imag = k_real * sin_cache + k_imag * cos_cache
 
         # Re-stack the rotated components into a last dimension of size 2.
-        q_rotated = torch.stack(
-            [q_rotated_real, q_rotated_imag], dim=-1
-        )  # shape: [17, 577, 8, 44, 2]
-        k_rotated = torch.stack(
-            [k_rotated_real, k_rotated_imag], dim=-1
-        )  # shape: [17, 577, 8, 44, 2]
+        q_rotated = torch.stack([q_rotated_real, q_rotated_imag], dim=-1)
+        k_rotated = torch.stack([k_rotated_real, k_rotated_imag], dim=-1)
 
         # Flatten the last two dimensions to match the original output shape.
         # Flatten back to the desired shape (e.g., collapse the last two dimensions).
@@ -989,7 +979,7 @@ class Llama4VisionRotaryEmbedding(RotaryEmbedding):
 
         return query_out.type_as(query), key_out.type_as(key)
 
-    def forward(
+    def forward_cuda(
         self,
         query: torch.Tensor,
         key: torch.Tensor,
@@ -1355,6 +1345,15 @@ def get_rope(
                 low_freq_factor,
                 high_freq_factor,
                 original_max_position,
+            )
+        elif scaling_type == "mllama4":
+            rotary_emb = Llama4VisionRotaryEmbedding(
+                head_size,
+                rotary_dim,
+                max_position,
+                base,
+                is_neox_style,
+                dtype,
             )
         elif scaling_type == "default":
             if "mrope_section" in rope_scaling:
