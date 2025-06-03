@@ -87,7 +87,7 @@ srt_hpu = ["sglang[runtime_common]",
            "numpy<2",
            "triton==3.1.0",
            "partial_json_parser",
-           "vllm-hpu-extension @ git+https://github.com/HabanaAI/vllm-hpu-extension.git@f1f66241e8603a3384880e414eef1e3316759e4e"]
+           "vllm-hpu-extension @ git+https://github.com/HabanaAI/vllm-hpu-extension.git@5b195bac632ffec50c87b96154a08181d7004c85"]
 
 # CPU: currently, there are no pre-built vllm wheels for CPU.
 # To install vllm for CPU, please follow the instruction here:
