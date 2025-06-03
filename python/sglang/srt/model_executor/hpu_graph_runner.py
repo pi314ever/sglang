@@ -478,10 +478,11 @@ class HPUGraphRunner:
 
         self.is_lazy = 1 if htorch.utils.internal.is_lazy() else 0
         if self.is_lazy:
-            self.model = htorch.hpu.wrap_in_hpu_graph(
-                HPUAdapter(self.model_runner.model, self.model_runner.dtype),
-                disable_tensor_cache=True,
-            )
+            self.model = HPUAdapter(self.model_runner.model, self.model_runner.dtype)
+            if not self.model_runner.server_args.disable_cuda_graph:
+                self.model = htorch.hpu.wrap_in_hpu_graph(
+                    self.model, disable_tensor_cache=True
+                )
         elif self.model_runner.server_args.enable_torch_compile:
             set_hpu_torch_compile_config()
             self.regional_compilation_layers_list = [RMSNorm, VocabParallelEmbedding]
