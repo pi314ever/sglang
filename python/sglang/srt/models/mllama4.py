@@ -1,406 +1,135 @@
 import math
 from collections.abc import Iterable
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple, Union
 
 import torch
 from torch import nn
-from transformers.models.llama4.configuration_llama4 import (
-    Llama4Config,
-    Llama4VisionConfig,
-)
+from transformers import Llama4Config, Llama4VisionModel
 from transformers.models.llama4.modeling_llama4 import Llama4MultiModalProjector
 
-from sglang.srt.distributed.parallel_state import get_tensor_model_parallel_world_size
-from sglang.srt.layers.attention.vision import QKV_BACKEND_IMPL, info_once
-from sglang.srt.layers.linear import (
-    ColumnParallelLinear,
-    QKVParallelLinear,
-    RowParallelLinear,
-)
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.moe.fused_moe_triton import FusedMoE
 from sglang.srt.layers.quantization import QuantizationConfig
-from sglang.srt.layers.rotary_embedding import get_rope
+from sglang.srt.layers.rotary_embedding import RotaryEmbedding
 from sglang.srt.managers.mm_utils import (
     MultiModalityDataPaddingPatternMultimodalTokens,
     general_mm_embed_routine,
 )
-from sglang.srt.managers.schedule_batch import (
-    MultimodalDataItem,
-    MultimodalInputs,
-    global_server_args_dict,
-)
+from sglang.srt.managers.schedule_batch import MultimodalDataItem, MultimodalInputs
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import default_weight_loader
-from sglang.srt.utils import add_prefix
+from sglang.srt.utils import add_prefix, is_hpu
+
+_is_hpu = is_hpu()
 
 
-class Llama4UnfoldConvolution(nn.Module):
+class Llama4VisionRotaryEmbedding(RotaryEmbedding):
     def __init__(
         self,
-        config: Llama4VisionConfig,
-        quant_config: Optional[QuantizationConfig] = None,
-        prefix: str = "",
+        config,
     ):
-        super().__init__()
-        kernel_size = config.patch_size
-        if isinstance(kernel_size, int):
-            kernel_size = (kernel_size, kernel_size)
-        self.unfold = torch.nn.Unfold(kernel_size=kernel_size, stride=config.patch_size)
-        self.linear = ColumnParallelLinear(
-            config.num_channels * kernel_size[0] * kernel_size[1],
-            config.hidden_size,
-            bias=False,
-            quant_config=quant_config,
-            gather_output=True,
-            prefix=add_prefix("linear", prefix),
+        head_size = config.hidden_size // config.num_attention_heads
+        rotary_dim = config.hidden_size // config.num_attention_heads // 2
+        max_position_embeddings = (config.image_size // config.patch_size) ** 2
+        base = config.rope_theta
+        is_neox_style = False
+        dtype = torch.bfloat16
+        super().__init__(
+            head_size, rotary_dim, max_position_embeddings, base, is_neox_style, dtype
         )
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.unfold(hidden_states)
-        hidden_states = hidden_states.permute(0, 2, 1)
-        hidden_states, _ = self.linear(hidden_states)
-        return hidden_states
+    def _compute_inv_freq(self, base: Union[int, float]) -> torch.Tensor:
+        inv_freqs = super()._compute_inv_freq(base)
+        inv_freqs = inv_freqs[: (self.rotary_dim // 2)]
+        return inv_freqs
+
+    def _compute_cos_sin_cache(self) -> torch.Tensor:
+        inv_freq = self._compute_inv_freq(self.base)
+
+        # Number of image patches (plus one extra row for CLS token, for example)
+        num_patches = self.max_position_embeddings
+        img_idx = torch.arange(num_patches, dtype=torch.int32).reshape(num_patches, 1)
+        img_idx = torch.cat([img_idx, img_idx[:1]], dim=0)
+        img_idx[-1, -1] = -2  # set to ID_CLS_TOKEN
+        num_patches_single_dim = int(math.sqrt(num_patches))
+        frequencies_x = img_idx % num_patches_single_dim
+        frequencies_y = img_idx // num_patches_single_dim
+
+        freqs_x = (
+            (frequencies_x + 1)[..., None] * inv_freq[None, None, :]
+        ).repeat_interleave(2, dim=-1)
+        freqs_y = (
+            (frequencies_y + 1)[..., None] * inv_freq[None, None, :]
+        ).repeat_interleave(2, dim=-1)
+
+        # The slicing reduces the last dimension so
+        # that ultimately we have one angle per 2D pair.
+        freqs = torch.cat([freqs_x, freqs_y], dim=-1).float().contiguous()[..., ::2]
+        freqs = freqs.masked_fill(img_idx.reshape(-1, 1, 1) < 0, 0)
+
+        # cache = torch.stack([torch.cos(freqs), torch.sin(freqs)], dim=-1)
+
+        # Compute cosine and sine for each angle.
+        cos_vals = torch.cos(freqs)
+        sin_vals = torch.sin(freqs)
+
+        cache = torch.concat([cos_vals, sin_vals], dim=-1)
+        return cache
+
+    def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.cos_sin_cache.to(hidden_states.device)
 
 
-class Llama4VisionMLP(nn.Module):
-    def __init__(
-        self,
-        input_size: int,
-        intermediate_size: int,
-        output_size: int,
-        bias: bool,
-        output_activation: bool,
-        quant_config: Optional[QuantizationConfig] = None,
-        prefix: str = "",
-    ):
-        super().__init__()
-        self.activation_fn = nn.GELU()  # ACT2FN[config.hidden_act]
-        self.fc1 = ColumnParallelLinear(
-            input_size,
-            intermediate_size,
-            bias=bias,
-            quant_config=quant_config,
-            prefix=add_prefix("fc1", prefix),
-        )
-        self.fc2 = RowParallelLinear(
-            intermediate_size,
-            output_size,
-            bias=bias,
-            quant_config=quant_config,
-            prefix=add_prefix("fc2", prefix),
-        )
-        self.output_activation = output_activation
+def vision_apply_rotary_emb(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    freqs_ci: torch.Tensor,
+):
+    # Ensure the cache is on the right device.
+    cos_sin_cache = freqs_ci.to(query.device)
+    cos_cache, sin_cache = cos_sin_cache.chunk(2, dim=-1)
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states, _ = self.fc1(hidden_states)
-        hidden_states = self.activation_fn(hidden_states)
-        hidden_states, _ = self.fc2(hidden_states)
-        if self.output_activation:
-            return self.activation_fn(hidden_states)
-        return hidden_states
+    query_2d = query.float().reshape(*query.shape[:-1], -1, 2)
+    key_2d = key.float().reshape(*key.shape[:-1], -1, 2)
+
+    # Reshape cos_cache and sin_cache to broadcast properly.
+    cos_cache = cos_cache.view(1, cos_cache.shape[0], 1, cos_cache.shape[-1])
+    sin_cache = sin_cache.view(1, sin_cache.shape[0], 1, sin_cache.shape[-1])
+
+    # Separate the real and imaginary parts.
+    q_real, q_imag = query_2d.unbind(-1)  # each: [17, 577, 8, 44]
+    k_real, k_imag = key_2d.unbind(-1)  # each: [17, 577, 8, 44]
+
+    # Manually apply the complex multiplication (rotation) using the trigonometric identities.
+    # For a complex multiplication: (a+ib)*(c+id) = (ac - bd) + i(ad + bc)
+    q_rotated_real = q_real * cos_cache - q_imag * sin_cache
+    q_rotated_imag = q_real * sin_cache + q_imag * cos_cache
+
+    k_rotated_real = k_real * cos_cache - k_imag * sin_cache
+    k_rotated_imag = k_real * sin_cache + k_imag * cos_cache
+
+    # Re-stack the rotated components into a last dimension of size 2.
+    q_rotated = torch.stack([q_rotated_real, q_rotated_imag], dim=-1)
+    k_rotated = torch.stack([k_rotated_real, k_rotated_imag], dim=-1)
+
+    # Flatten the last two dimensions to match the original output shape.
+    # Flatten back to the desired shape (e.g., collapse the last two dimensions).
+    query_out = q_rotated.flatten(3)
+    key_out = k_rotated.flatten(3)
+
+    return query_out.type_as(query), key_out.type_as(key)
 
 
-def pixel_shuffle(input_tensor, shuffle_ratio):
-    # input_tensor: [batch_size, num_patches, channels]
-    batch_size, num_patches, channels = input_tensor.shape
-    patch_size = int(math.sqrt(num_patches))
+if _is_hpu:
+    import transformers.models.llama4.modeling_llama4
 
-    input_tensor = input_tensor.view(batch_size, patch_size, patch_size, -1)
-    batch_size, height, width, channels = input_tensor.size()
-
-    reshaped_tensor = input_tensor.view(
-        batch_size, height, int(width * shuffle_ratio), int(channels / shuffle_ratio)
+    # Monkey patch the Llama4VisionRotaryEmbedding class
+    transformers.models.llama4.modeling_llama4.Llama4VisionRotaryEmbedding = (
+        Llama4VisionRotaryEmbedding
     )
-    reshaped_tensor = reshaped_tensor.permute(0, 2, 1, 3).contiguous()
-
-    reshaped_tensor = reshaped_tensor.view(
-        batch_size,
-        int(height * shuffle_ratio),
-        int(width * shuffle_ratio),
-        int(channels / (shuffle_ratio**2)),
+    transformers.models.llama4.modeling_llama4.vision_apply_rotary_emb = (
+        vision_apply_rotary_emb
     )
-    reshaped_tensor = reshaped_tensor.permute(0, 2, 1, 3).contiguous()
-
-    output_tensor = reshaped_tensor.view(batch_size, -1, reshaped_tensor.shape[-1])
-    return output_tensor
-
-
-class Llama4VisionPixelShuffleMLP(nn.Module):
-    def __init__(
-        self,
-        config: Llama4VisionConfig,
-        quant_config: Optional[QuantizationConfig] = None,
-        prefix: str = "",
-    ):
-        super().__init__()
-        self.pixel_shuffle_ratio = config.pixel_shuffle_ratio
-        self.inner_dim = int(
-            config.projector_input_dim // (self.pixel_shuffle_ratio**2)
-        )
-        self.output_dim = config.projector_output_dim
-        self.mlp = Llama4VisionMLP(
-            config.intermediate_size,
-            config.projector_input_dim,
-            config.projector_output_dim,
-            config.multi_modal_projector_bias,
-            output_activation=True,
-            quant_config=quant_config,
-            prefix=add_prefix("mlp", prefix),
-        )
-
-    def forward(self, encoded_patches: torch.Tensor) -> torch.Tensor:
-        encoded_patches = pixel_shuffle(encoded_patches, self.pixel_shuffle_ratio)
-        return self.mlp(encoded_patches)
-
-
-class Llama4VisionAttention(nn.Module):
-    def __init__(
-        self,
-        config: Llama4VisionConfig,
-        quant_config: Optional[QuantizationConfig] = None,
-        prefix: str = "",
-    ):
-        super().__init__()
-        self.config = config
-        self.tp_size = get_tensor_model_parallel_world_size()
-        self.embed_dim = config.hidden_size
-        self.num_heads = config.num_attention_heads
-        self.head_dim = config.hidden_size // config.num_attention_heads
-        self.num_key_value_groups = 1
-        self.attention_dropout = config.attention_dropout
-        self.num_local_heads = self.num_heads // self.tp_size
-        self.q_size = self.num_local_heads * self.head_dim
-        self.kv_size = self.num_local_heads * self.head_dim
-
-        if global_server_args_dict["mm_attention_backend"] is None:
-            qkv_backend = "sdpa"
-            info_once(f"Multimodal attention backend not set. Use {qkv_backend}.")
-        else:
-            qkv_backend = global_server_args_dict["mm_attention_backend"]
-
-        info_once(f"Using {qkv_backend} as multimodal attention backend.")
-
-        self.qkv_backend = QKV_BACKEND_IMPL[qkv_backend](
-            head_dim=self.head_dim,
-            num_heads=self.num_local_heads,
-            num_kv_heads=self.num_local_heads,
-            dropout=0.0,
-            flatten_batch=False,
-            softmax_in_single_precision=False,
-        )
-        self.qkv_proj = QKVParallelLinear(
-            self.embed_dim,
-            self.head_dim,
-            self.num_heads,
-            bias=True,
-            quant_config=quant_config,
-            prefix=add_prefix("qkv_proj", prefix),
-        )
-        self.o_proj = RowParallelLinear(
-            self.num_heads * self.head_dim,
-            self.embed_dim,
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix("o_proj", prefix),
-        )
-        self.rotary_emb = get_rope(
-            self.head_dim,
-            config.hidden_size // config.num_attention_heads // 2,
-            (config.image_size // config.patch_size) ** 2,
-            config.rope_theta,
-            rope_scaling={"rope_type": "mllama4"},
-            is_neox_style=False,
-        )
-        pass
-
-    def forward(self, hidden_states: torch.Tensor):
-        input_shape = hidden_states.shape[:-1]
-        bsz = hidden_states.shape[0]
-
-        qkv, _ = self.qkv_proj(hidden_states)
-        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-
-        q = q.view(q.shape[0], q.shape[1], self.num_local_heads, self.head_dim)
-        k = k.view(k.shape[0], k.shape[1], self.num_local_heads, self.head_dim)
-        q, k = self.rotary_emb(q, k)
-
-        q = q.view(q.shape[0], q.shape[1], -1)
-        k = k.view(k.shape[0], k.shape[1], -1)
-
-        attn_output = self.qkv_backend(
-            q,
-            k,
-            v,
-            bsz,
-            cu_seqlens=None,
-            attention_mask=None,
-        )
-
-        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-        attn_output, _ = self.o_proj(attn_output)
-        return attn_output
-
-
-class Llama4VisionEncoderLayer(nn.Module):
-    def __init__(
-        self,
-        config: Llama4VisionConfig,
-        quant_config: Optional[QuantizationConfig] = None,
-        prefix="",
-    ):
-        super().__init__()
-        self.hidden_size = config.hidden_size
-
-        self.self_attn = Llama4VisionAttention(
-            config, quant_config, prefix=add_prefix("self_attn", prefix)
-        )
-        self.mlp = Llama4VisionMLP(
-            config.hidden_size,
-            config.intermediate_size,
-            config.hidden_size,
-            True,
-            False,
-            quant_config,
-            add_prefix("mlp", prefix),
-        )
-
-        self.input_layernorm = nn.LayerNorm(config.hidden_size)
-        self.post_attention_layernorm = nn.LayerNorm(config.hidden_size)
-
-    def forward(self, hidden_state: torch.Tensor):
-        # Self Attention
-        residual = hidden_state
-
-        hidden_state = self.input_layernorm(hidden_state)
-
-        hidden_state = self.self_attn(hidden_state)
-        hidden_state = residual + hidden_state
-
-        # Feed forward
-        residual = hidden_state
-        hidden_state = self.post_attention_layernorm(hidden_state)
-        hidden_state = self.mlp(hidden_state)
-        hidden_state = residual + hidden_state
-        return hidden_state
-
-
-class Llama4VisionEncoder(nn.Module):
-    def __init__(
-        self,
-        config: Llama4VisionConfig,
-        quant_config: Optional[QuantizationConfig] = None,
-        prefix: str = "",
-    ):
-        super().__init__()
-        self.config = config
-        self.layers = nn.ModuleList(
-            [
-                Llama4VisionEncoderLayer(
-                    config, quant_config, add_prefix(f"layers.{i}", prefix)
-                )
-                for i in range(config.num_hidden_layers)
-            ]
-        )
-        self.gradient_checkpointing = False
-        self.config = config
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-    ):
-        for encoder_layer in self.layers:
-            hidden_states = encoder_layer(hidden_state=hidden_states)
-
-        return hidden_states
-
-
-class Llama4VisionModel(nn.Module):
-    def __init__(
-        self,
-        config: Llama4VisionConfig,
-        quant_config: Optional[QuantizationConfig] = None,
-        prefix: str = "",
-    ):
-        super().__init__()
-        self.image_size = config.image_size
-        self.patch_size = config.patch_size
-        self.hidden_size = config.hidden_size
-        self.num_channels = config.num_channels
-
-        self.num_patches = (self.image_size // self.patch_size) ** 2 + 1
-        self.scale = config.hidden_size**-0.5
-
-        self.patch_embedding = Llama4UnfoldConvolution(config)
-
-        self.class_embedding = nn.Parameter(self.scale * torch.randn(self.hidden_size))
-        self.positional_embedding_vlm = nn.Parameter(
-            self.scale * torch.randn(self.num_patches, self.hidden_size)
-        )
-
-        # layer norms
-        self.layernorm_pre = nn.LayerNorm(self.hidden_size)
-        self.layernorm_post = nn.LayerNorm(self.hidden_size)
-
-        # encoders
-        self.model = Llama4VisionEncoder(
-            config, quant_config, add_prefix("model", prefix)
-        )
-        self.vision_adapter = Llama4VisionPixelShuffleMLP(config)
-
-    def get_input_embeddings(self):
-        """
-        This function is used to fetch the first embedding layer to activate grads on inputs.
-        """
-        return self.patch_embedding
-
-    def forward(
-        self,
-        pixel_values: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-    ):
-        # num_concurrent_media and num_chunks are both currently 1
-        batch_size_times_num_tiles, num_channels, height, width = pixel_values.shape
-        num_concurrent_media = 1
-        num_chunks = 1
-        hidden_state = self.patch_embedding(pixel_values)
-        _, num_patches, hidden_dim = hidden_state.shape
-
-        # Add cls token
-        hidden_state = hidden_state.reshape(
-            batch_size_times_num_tiles * num_concurrent_media * num_chunks,
-            num_patches,
-            hidden_dim,
-        )
-        class_embedding = self.class_embedding.expand(
-            hidden_state.shape[0], 1, hidden_state.shape[-1]
-        )
-        hidden_state = torch.cat([hidden_state, class_embedding], dim=1)
-        num_patches += 1
-
-        # Position embeddings
-        hidden_state = hidden_state.reshape(
-            batch_size_times_num_tiles * num_concurrent_media,
-            num_chunks,
-            num_patches,
-            hidden_dim,
-        )
-        positional_embedding = self.positional_embedding_vlm.to(
-            dtype=hidden_state.dtype, device=hidden_state.device
-        )
-        hidden_state = hidden_state + positional_embedding
-
-        hidden_state = self.layernorm_pre(hidden_state)
-        hidden_state = hidden_state.view(batch_size_times_num_tiles, -1, hidden_dim)
-        hidden_state = self.model(hidden_state)
-        hidden_state = self.layernorm_post(hidden_state)
-
-        hidden_state = hidden_state[:, :-1, :]
-
-        # now, we use Llama4VisionPixelShuffle + mlp to project embeddings
-        hidden_state = self.vision_adapter(hidden_state)
-
-        return hidden_state
 
 
 class Llama4ForConditionalGeneration(nn.Module):
@@ -419,9 +148,7 @@ class Llama4ForConditionalGeneration(nn.Module):
         self.config = config
         self.quant_config = quant_config
 
-        self.vision_model = Llama4VisionModel(
-            config.vision_config, quant_config, add_prefix("vision_model", prefix)
-        )
+        self.vision_model = Llama4VisionModel(config.vision_config)
         self.multi_modal_projector = Llama4MultiModalProjector(config)
 
         # Initialize the language model
@@ -452,7 +179,8 @@ class Llama4ForConditionalGeneration(nn.Module):
             .type(next(self.vision_model.parameters()).dtype)
         )
 
-        image_features = self.vision_model(pixel_values)
+        image_outputs = self.vision_model(pixel_values, output_hidden_states=False)
+        image_features = image_outputs.last_hidden_state
         vision_flat = image_features.view(-1, image_features.size(-1))
         projected_vision_flat = self.multi_modal_projector(vision_flat)
         return projected_vision_flat
@@ -529,7 +257,7 @@ class Llama4ForConditionalGeneration(nn.Module):
         )
 
         for name, loaded_weight in weights:
-            if "vision" not in name:
+            if not "vision" in name:
                 name, loaded_weight = self.permute_qk_weight_for_rotary(
                     name, loaded_weight
                 )
@@ -538,7 +266,7 @@ class Llama4ForConditionalGeneration(nn.Module):
                 if weight_name not in name:
                     continue
 
-                if "vision" in name and "self_attn" not in name:
+                if "vision" in name:
                     continue
                 name = name.replace(weight_name, param_name)
                 param = params_dict[name]
