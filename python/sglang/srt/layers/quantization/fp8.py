@@ -86,7 +86,7 @@ if _is_hip:
     from aiter.fused_moe_bf16_asm import asm_moe, ck_moe_2stages
     from aiter.ops.shuffle import shuffle_weight
 
-if not _is_cuda or not _is_hpu:
+if not (_is_cuda or _is_hpu):
     from vllm._custom_ops import scaled_fp8_quant
 
 

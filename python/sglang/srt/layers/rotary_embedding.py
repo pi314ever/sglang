@@ -85,7 +85,7 @@ class RotaryEmbedding(CustomOp):
         if not _is_cuda:
             cache = cache.to(dtype)
 
-        if not _is_cuda or not _is_hpu or self.head_size not in [64, 128, 256, 512]:
+        if not (_is_cuda or _is_hpu) and self.head_size not in [64, 128, 256, 512]:
             from vllm._custom_ops import rotary_embedding
 
             self.vllm_rotary_embedding = rotary_embedding
