@@ -23,6 +23,7 @@ from collections import namedtuple
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
+import numpy as np
 import torch
 import tqdm
 
@@ -176,6 +177,8 @@ class HPUMultimodalDataItem(HPUMultimodalDataItemBase):
 def maybe_to_hpu(input):
     if isinstance(input, torch.Tensor):
         return input.to("hpu")
+    elif isinstance(input, np.ndarray):
+        return torch.tensor(input).to("hpu")
     return input
 
 
