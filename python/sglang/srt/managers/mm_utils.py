@@ -202,61 +202,6 @@ def get_embedding_and_mask(
     ).unsqueeze(-1)
 
     num_mm_tokens_in_input_ids = special_multimodal_mask.sum().item()
-    if num_mm_tokens_in_input_ids != num_mm_tokens_in_embedding:
-        logger.warning(
-            f"Number of tokens in multimodal embedding does not match those in the input text."
-            f"Got {num_mm_tokens_in_input_ids} tokens in the text but {num_mm_tokens_in_embedding} "
-            "tokens from multimodal embeddings."
-        )
-        if num_mm_tokens_in_input_ids < num_mm_tokens_in_embedding:
-            # TODO: chunked prefill will split special tokens from input_ids into several passes, failing the embedding
-            # a fix may be cache the unfinished multimodal embedding for future reuse, determine the tokens to embed with
-            # extend_start_loc and extend_seq_lens
-            chunked_prefill_size = global_server_args_dict["chunked_prefill_size"]
-            if chunked_prefill_size != -1:
-                logger.warning(
-                    "You may want to avoid this issue by raising `chunked_prefill_size`, or disabling chunked prefill"
-                )
-            # extract from the end: this is a compromise
-            if embedding.dim() == 2:
-                embedding = embedding[-num_mm_tokens_in_input_ids:, :]
-            else:
-                num_multimodal = num_mm_tokens_in_input_ids // embedding.shape[0]
-                embedding = embedding[-num_multimodal:, :]
-        else:
-            raise RuntimeError(
-                f"Insufficient multimodal embedding length: {num_mm_tokens_in_input_ids=} vs {num_mm_tokens_in_embedding=}. This is an internal error"
-            )
-
-    return embedding, special_multimodal_mask
-
-
-def get_embedding_and_mask(
-    data_embedding_func: Callable[[List[MultimodalDataItem]], torch.Tensor],
-    embedding_items: List[MultimodalDataItem],
-    placeholder_tensor: torch.Tensor,
-    input_ids: torch.Tensor,
-):
-    """
-    Get the multimodal embedding and its mask from input_ids
-
-    """
-    # 1. Get the embedding
-    embedding = data_embedding_func(embedding_items)
-
-    # 2. Check the embedding
-    if embedding.dim() == 2:
-        num_mm_tokens_in_embedding = embedding.shape[0]
-    else:
-        num_mm_tokens_in_embedding = embedding.shape[0] * embedding.shape[1]
-
-    # the mask of multimodal tokens from input_ids
-    special_multimodal_mask = torch.isin(
-        input_ids,
-        placeholder_tensor,
-    ).unsqueeze(-1)
-
-    num_mm_tokens_in_input_ids = special_multimodal_mask.sum().item()
 
     if num_mm_tokens_in_input_ids != num_mm_tokens_in_embedding:
         logger.warning(
