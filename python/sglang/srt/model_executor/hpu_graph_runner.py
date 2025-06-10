@@ -146,7 +146,7 @@ class HPUForwardBatch(HPUForwardBatchBase):
         return self.mm_inputs is not None
 
     def merge_mm_inputs(self):
-        return self.mm_inputs
+        return self.mm_inputs[0]
 
 
 def set_hpu_torch_compile_config():
@@ -320,7 +320,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
     if forward_batch.contains_mm_inputs():
         if forward_batch.contains_audio_inputs():
             raise NotImplementedError(f"Audio inputs are not supported yet")
-        mm_inputs = create_hpu_mm_inputs(forward_batch)
+        mm_inputs = [create_hpu_mm_inputs(forward_batch)]
 
     else:
         mm_inputs = None
