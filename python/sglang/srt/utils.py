@@ -2098,6 +2098,10 @@ def is_fa3_default_architecture(hf_config):
 
 
 def get_scheduler_device(worker_device: str):
+    # Use SGLANG_SCHEDULER_DEVICE if explicitly set
+    scheduler_device = os.getenv("SGLANG_SCHEDULER_DEVICE")
+    if scheduler_device:
+        return scheduler_device
     # HPU has higher overhead when running many small ops
     # so we run all scheduler ops on CPU when using HPU
     return "cpu" if is_hpu() else worker_device
