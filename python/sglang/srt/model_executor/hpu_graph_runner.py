@@ -88,12 +88,39 @@ HPUForwardBatchBase = namedtuple(
         "token_to_kv_pool",
         "use_contiguous_pa",
         "mm_inputs",
+        "top_logprobs_nums",
+        "token_ids_logprobs",
+        "extend_seq_lens_cpu",
+        "extend_logprob_start_lens_cpu",
+        "extend_input_logprob_token_ids_gpu",
+        "global_num_tokens_gpu",
+        "dp_local_start_pos",
+        "dp_local_num_tokens",
+        "gathered_buffer",
+        "global_num_tokens_for_logprob_cpu",
+        "global_num_tokens_for_logprob_gpu",
         "input_embeds",
-        "extend_return_logprob",
+        "return_logprob",
         "padded_static_len",
         "capture_hidden_mode",
     ],
-    defaults=[None, False, -1, CaptureHiddenMode.NULL],
+    defaults=[
+        None,  # top_logprobs_nums
+        None,  # token_ids_logprobs
+        None,  # extend_seq_lens_cpu
+        None,  # extend_logprob_start_lens_cpu
+        None,  # extend_input_logprob_token_ids_gpu
+        None,  # global_num_tokens_gpu
+        None,  # dp_local_start_pos
+        None,  # dp_local_num_tokens
+        None,  # gathered_buffer
+        None,  # global_num_tokens_for_logprob_cpu
+        None,  # global_num_tokens_for_logprob_gpu
+        None,  # input_embeds
+        False,  # return_logprob
+        -1,  # padded_static_len
+        CaptureHiddenMode.NULL,  # capture_hidden_mode
+    ],
 )
 
 HPUMultimodalInputs = namedtuple(
@@ -231,6 +258,18 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         token_to_kv_pool=forward_batch.token_to_kv_pool,
         use_contiguous_pa=use_contiguous_pa,
         mm_inputs=mm_inputs,
+        return_logprob=forward_batch.return_logprob,
+        top_logprobs_nums=forward_batch.top_logprobs_nums,
+        token_ids_logprobs=forward_batch.token_ids_logprobs,
+        extend_seq_lens_cpu=forward_batch.extend_seq_lens_cpu,
+        extend_logprob_start_lens_cpu=forward_batch.extend_logprob_start_lens_cpu,
+        extend_input_logprob_token_ids_gpu=forward_batch.extend_input_logprob_token_ids_gpu,
+        global_num_tokens_gpu=forward_batch.global_num_tokens_gpu,
+        dp_local_start_pos=forward_batch.dp_local_start_pos,
+        dp_local_num_tokens=forward_batch.dp_local_num_tokens,
+        gathered_buffer=forward_batch.gathered_buffer,
+        global_num_tokens_for_logprob_cpu=forward_batch.global_num_tokens_for_logprob_cpu,
+        global_num_tokens_for_logprob_gpu=forward_batch.global_num_tokens_for_logprob_gpu,
     )
 
 
@@ -528,6 +567,31 @@ class HPUGraphRunner:
                 hidden_states=(
                     results.hidden_states.clone()[: forward_batch.batch_size]
                     if results.hidden_states is not None
+                    else None
+                ),
+                input_token_logprobs=(
+                    results.input_token_logprobs.clone()[: forward_batch.batch_size]
+                    if results.input_token_logprobs is not None
+                    else None
+                ),
+                input_top_logprobs_val=(
+                    results.input_top_logprobs_val[: forward_batch.batch_size]
+                    if results.input_top_logprobs_val is not None
+                    else None
+                ),
+                input_top_logprobs_idx=(
+                    results.input_top_logprobs_idx[: forward_batch.batch_size]
+                    if results.input_top_logprobs_idx is not None
+                    else None
+                ),
+                input_token_ids_logprobs_val=(
+                    results.input_token_ids_logprobs_val[: forward_batch.batch_size]
+                    if results.input_token_ids_logprobs_val is not None
+                    else None
+                ),
+                input_token_ids_logprobs_idx=(
+                    results.input_token_ids_logprobs_idx[: forward_batch.batch_size]
+                    if results.input_token_ids_logprobs_idx is not None
                     else None
                 ),
             )
