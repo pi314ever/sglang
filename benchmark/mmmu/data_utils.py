@@ -103,6 +103,8 @@ def load_yaml(file_path):
             yaml_dict = yaml.safe_load(stream)
         except yaml.YAMLError as exc:
             print(exc)
+            # If there is an error in loading the YAML file, return None
+            return None
 
     return yaml_dict
 
