@@ -570,27 +570,27 @@ class HPUGraphRunner:
                     else None
                 ),
                 input_token_logprobs=(
-                    results.input_token_logprobs.clone()[: forward_batch.batch_size]
+                    results.input_token_logprobs.clone()
                     if results.input_token_logprobs is not None
                     else None
                 ),
                 input_top_logprobs_val=(
-                    results.input_top_logprobs_val[: forward_batch.batch_size]
+                    results.input_top_logprobs_val
                     if results.input_top_logprobs_val is not None
                     else None
                 ),
                 input_top_logprobs_idx=(
-                    results.input_top_logprobs_idx[: forward_batch.batch_size]
+                    results.input_top_logprobs_idx
                     if results.input_top_logprobs_idx is not None
                     else None
                 ),
                 input_token_ids_logprobs_val=(
-                    results.input_token_ids_logprobs_val[: forward_batch.batch_size]
+                    results.input_token_ids_logprobs_val
                     if results.input_token_ids_logprobs_val is not None
                     else None
                 ),
                 input_token_ids_logprobs_idx=(
-                    results.input_token_ids_logprobs_idx[: forward_batch.batch_size]
+                    results.input_token_ids_logprobs_idx
                     if results.input_token_ids_logprobs_idx is not None
                     else None
                 ),
