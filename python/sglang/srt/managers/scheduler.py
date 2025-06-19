@@ -1872,6 +1872,18 @@ class Scheduler(
             )
         if RECORD_STEP_TIME:
             ret["step_time_dict"] = self.step_time_dict
+
+        if _is_hpu:
+            warmup_time = (
+                self.tp_worker.worker.model_runner.cuda_graph_runner.warmup_time
+                if hasattr(
+                    self.tp_worker.worker.model_runner.cuda_graph_runner,
+                    "warmup_time",
+                )
+                else None
+            )
+            ret["hpu_graph_warmup_time"] = warmup_time
+
         return GetInternalStateReqOutput(
             internal_state=ret,
         )

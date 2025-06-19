@@ -30,6 +30,9 @@ from sglang.bench_serving import (
 from sglang.lang.backend.runtime_endpoint import Runtime
 from sglang.srt.entrypoints.engine import Engine
 from sglang.srt.server_args import ServerArgs
+from sglang.srt.utils import is_hpu
+
+_is_hpu = is_hpu()
 
 
 @dataclasses.dataclass
@@ -262,6 +265,10 @@ def throughput_test_once(
     measurement_results["last_gen_throughput"] = server_info["internal_states"][0][
         "last_gen_throughput"
     ]
+    if _is_hpu:
+        measurement_results["hpu_graph_warmup_time"] = server_info["internal_states"][
+            0
+        ]["hpu_graph_warmup_time"]
 
     return measurement_results
 
@@ -372,6 +379,12 @@ def throughput_test(
     )
     print("{:<40} {:<10}".format("Backend:", result["backend"]))
     print("{:<40} {:<10}".format("Successful requests:", result["successful_requests"]))
+    if _is_hpu:
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Warmup duration (s):", result["hpu_graph_warmup_time"]
+            )
+        )
     print("{:<40} {:<10.2f}".format("Benchmark duration (s):", result["total_latency"]))
     print("{:<40} {:<10}".format("Total input tokens:", result["total_input_tokens"]))
     print(
@@ -402,6 +415,12 @@ def throughput_test(
             "Total token throughput (tok/s):", result["total_throughput"]
         )
     )
+    if _is_hpu:
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Warmup duration (s):", result["hpu_graph_warmup_time"]
+            )
+        )
     print("=" * 50)
 
     return result

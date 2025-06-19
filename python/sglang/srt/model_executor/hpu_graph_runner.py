@@ -389,6 +389,7 @@ class HPUGraphRunner:
         environment.runtime_params["model_type"] = (
             model_runner.model_config.hf_config.model_type
         )
+        self.warmup_time = None
 
         self.is_lazy = 1 if htorch.utils.internal.is_lazy() else 0
         if self.is_lazy:
@@ -430,9 +431,8 @@ class HPUGraphRunner:
                     time_start = time.perf_counter()
                     self.capture()
                     time_end = time.perf_counter()
-                    logger.info(
-                        f"Capture hpu graph time: {time_end - time_start} seconds"
-                    )
+                    self.warmup_time = time_end - time_start
+                    logger.info(f"Capture hpu graph time: {self.warmup_time} seconds")
                     logger.info("Capture hpu graph success")
             except RuntimeError as e:
                 raise Exception(f"Capture hpu graph failed: {e}\n")
