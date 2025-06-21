@@ -483,9 +483,22 @@ class HPUGraphRunner:
         if self.is_lazy:
             self.model = HPUAdapter(self.model_runner.model, self.model_runner.dtype)
             if not self.model_runner.server_args.disable_cuda_graph:
-                self.model = htorch.hpu.wrap_in_hpu_graph(
-                    self.model, disable_tensor_cache=True
-                )
+                if self.model_runner.is_multimodal:
+                    logger.warn(
+                        "Multimodal model cannot wrap in HPU graphs completely. Attempting to wrap vision and language model in HPU graph, with lazy mode fallback."
+                    )
+                    if hasattr(self.model.model, "vision_model"):
+                        self.model.model.vision_model = htorch.hpu.wrap_in_hpu_graph(
+                            self.model.model.vision_model, disable_tensor_cache=True
+                        )
+                    if hasattr(self.model.model, "language_model"):
+                        self.model.model.language_model = htorch.hpu.wrap_in_hpu_graph(
+                            self.model.model.language_model, disable_tensor_cache=True
+                        )
+                else:
+                    self.model = htorch.hpu.wrap_in_hpu_graph(
+                        self.model, disable_tensor_cache=True
+                    )
         elif self.model_runner.server_args.enable_torch_compile:
             set_hpu_torch_compile_config()
             self.regional_compilation_layers_list = [RMSNorm, VocabParallelEmbedding]
