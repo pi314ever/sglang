@@ -415,12 +415,6 @@ def throughput_test(
             "Total token throughput (tok/s):", result["total_throughput"]
         )
     )
-    if _is_hpu:
-        print(
-            "{:<40} {:<10.2f}".format(
-                "Warmup duration (s):", result["hpu_graph_warmup_time"]
-            )
-        )
     print("=" * 50)
 
     return result
