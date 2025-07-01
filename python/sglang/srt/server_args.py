@@ -206,6 +206,10 @@ class ServerArgs:
     disaggregation_ib_device: Optional[str] = None
     pdlb_url: Optional[str] = None
 
+    # Profiling
+    profile_batch: bool = False
+    profile_batch_num_steps: int = 5
+
     def __post_init__(self):
         # Expert parallelism
         if self.enable_ep_moe:
@@ -1335,6 +1339,19 @@ class ServerArgs:
             choices=["sdpa", "fa3", "triton_attn"],
             default=ServerArgs.mm_attention_backend,
             help="Set multimodal attention backend.",
+        )
+
+        # Profiling
+        parser.add_argument(
+            "--profile-batch",
+            action="store_true",
+            help="Enable torch profiler for forward calls",
+        )
+        parser.add_argument(
+            "--profile-batch-num-steps",
+            type=int,
+            help="Number of forward calls to profile before stopping profiler",
+            default=ServerArgs.profile_batch_num_steps,
         )
 
     @classmethod

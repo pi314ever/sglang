@@ -1513,11 +1513,22 @@ class Scheduler(
         self, batch: ScheduleBatch
     ) -> Union[GenerationBatchResult, EmbeddingBatchResult]:
         """Run a batch."""
-        self.forward_ct += 1
+        if self.server_args.profile_batch and self.forward_ct == 0:
+            num_steps = self.server_args.profile_batch_num_steps
+            self.start_profile(
+                output_dir=None,
+                num_steps=num_steps,
+                activities=None,
+                with_stack=None,
+                record_shapes=None,
+                profile_id=f"profile_batch_{num_steps}_steps",
+            )
 
+        self.forward_ct += 1
         # Check profiler
         if (
-            self.profiler_target_forward_ct
+            self.torch_profiler
+            and self.profiler_target_forward_ct
             and self.profiler_target_forward_ct <= self.forward_ct
         ):
             self.stop_profile()
@@ -2101,6 +2112,8 @@ class Scheduler(
             output_dir = os.getenv("SGLANG_TORCH_PROFILER_DIR", "/tmp")
         if activities is None:
             activities = ["CPU", "GPU"]
+            if _is_hpu:
+                activities.append("HPU")
 
         self.torch_profiler_output_dir = output_dir
         self.profiler_activities = activities
@@ -2151,8 +2164,8 @@ class Scheduler(
         if self.profiler_activities is None:
             return
 
-        logger.info("Stop profiling...")
         if self.torch_profiler is not None:
+            logger.info("Stop profiling...")
             self.torch_profiler.stop()
             self.torch_profiler.export_chrome_trace(
                 os.path.join(
@@ -2180,7 +2193,7 @@ class Scheduler(
         self.torch_profiler_output_dir = None
         self.profiler_activities = None
 
-        if self.profiler_target_forward_ct:
+        if not self.server_args.profile_batch and self.profiler_target_forward_ct:
             self.send_to_tokenizer.send_pyobj(
                 ProfileReqOutput(success=True, message="Succeeded.")
             )
