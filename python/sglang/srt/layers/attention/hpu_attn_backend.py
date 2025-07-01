@@ -138,12 +138,8 @@ class HPUAttnBackend(AttentionBackend):
         value_cache = forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id)
 
         query = q.view(-1, 1, layer.tp_q_head_num * layer.qk_head_dim)
-        key_cache = key_cache.view(
-            -1, forward_batch.page_size, layer.tp_k_head_num, layer.qk_head_dim
-        )
-        value_cache = value_cache.view(
-            -1, forward_batch.page_size, layer.tp_v_head_num, layer.v_head_dim
-        )
+        key_cache = key_cache.view(-1, layer.tp_k_head_num, layer.qk_head_dim)
+        value_cache = value_cache.view(-1, layer.tp_v_head_num, layer.v_head_dim)
 
         if forward_batch.use_contiguous_pa:
 
@@ -170,6 +166,7 @@ class HPUAttnBackend(AttentionBackend):
             block_mapping=forward_batch.block_mapping,
             block_bias=forward_batch.attn_bias,
             block_groups=forward_batch.block_groups,
+            block_size=forward_batch.page_size,
             scale=layer.scaling,
             matmul_qk_op=self.matmul_qk,
             matmul_av_op=self.matmul_av,
