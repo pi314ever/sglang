@@ -108,7 +108,7 @@ class HPUAttnBackend(AttentionBackend):
                 return cache.index_select(0, blocks.flatten())
 
         output = ops.prompt_attention(
-            impl="fsdpa",
+            impl="fsdpa_impl",
             query=query,
             key=key,
             value=value,
@@ -183,6 +183,7 @@ class HPUAttnBackend(AttentionBackend):
             block_size=forward_batch.page_size,
             scale=layer.scaling,
             matmul_qk_op=self.matmul_qk,
+            position_bias=None,
             matmul_av_op=self.matmul_av,
             batch2block_matmul_op=self.batch2block_matmul,
             block2batch_matmul_op=self.block2batch_matmul,

@@ -384,9 +384,8 @@ class HPUGraphRunner:
         self.model_runner = model_runner
         import habana_frameworks.torch as htorch
         import vllm_hpu_extension.environment as environment
-        from vllm_hpu_extension.flags import enabled_flags
 
-        environment.runtime_params["model_type"] = (
+        environment._VLLM_VALUES["model_type"] = (
             model_runner.model_config.hf_config.model_type
         )
         self.warmup_time = None
