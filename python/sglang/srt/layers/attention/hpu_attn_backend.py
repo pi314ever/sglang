@@ -32,6 +32,20 @@ if _is_hpu:
     from vllm_hpu_extension.utils import Matmul, ModuleFusedSDPA, Softmax
 
 
+@torch.compiler.disable
+def _process_kv_buffer_no_compile(
+    save_kv_cache, token_to_kv_pool, layer, out_cache_loc, k, v
+):
+    """Helper function to set and get KV buffer without compilation."""
+    if save_kv_cache:
+        token_to_kv_pool.set_kv_buffer(layer, out_cache_loc, k, v)
+
+    return (
+        token_to_kv_pool.get_key_buffer(layer.layer_id),
+        token_to_kv_pool.get_value_buffer(layer.layer_id),
+    )
+
+
 class HPUAttnBackend(AttentionBackend):
     def __init__(self, model_runner: ModelRunner):
         super().__init__()
@@ -59,17 +73,17 @@ class HPUAttnBackend(AttentionBackend):
         save_kv_cache=True,
     ):
 
-        if save_kv_cache:
-            forward_batch.token_to_kv_pool.set_kv_buffer(
-                layer, forward_batch.out_cache_loc, k, v
-            )
-
+        key_cache, value_cache = _process_kv_buffer_no_compile(
+            save_kv_cache,
+            forward_batch.token_to_kv_pool,
+            layer,
+            forward_batch.out_cache_loc,
+            k,
+            v,
+        )
         query = q.view(1, -1, layer.tp_q_head_num, layer.qk_head_dim)
         key = k.view(1, -1, layer.tp_k_head_num, layer.qk_head_dim)
         value = v.view(1, -1, layer.tp_v_head_num, layer.v_head_dim)
-
-        key_cache = forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id)
-        value_cache = forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id)
         key_cache = key_cache.view(
             -1, forward_batch.page_size, layer.tp_k_head_num, layer.qk_head_dim
         )
@@ -128,14 +142,14 @@ class HPUAttnBackend(AttentionBackend):
         # During torch.compile, there is a bug in rotary_emb that causes the
         # output value to have a 3D tensor shape. This reshapes the output correctly.
 
-        if save_kv_cache:
-            forward_batch.token_to_kv_pool.set_kv_buffer(
-                layer, forward_batch.out_cache_loc, k, v
-            )
-
-        # Get key and value caches
-        key_cache = forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id)
-        value_cache = forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id)
+        key_cache, value_cache = _process_kv_buffer_no_compile(
+            save_kv_cache,
+            forward_batch.token_to_kv_pool,
+            layer,
+            forward_batch.out_cache_loc,
+            k,
+            v,
+        )
 
         query = q.view(-1, 1, layer.tp_q_head_num * layer.qk_head_dim)
         key_cache = key_cache.view(-1, layer.tp_k_head_num, layer.qk_head_dim)
