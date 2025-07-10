@@ -16,16 +16,14 @@
 from __future__ import annotations
 
 import logging
-import math
 import os
 import time
 from collections import namedtuple
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-import tqdm
 
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
@@ -347,7 +345,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
 
     if forward_batch.contains_mm_inputs():
         if forward_batch.contains_audio_inputs():
-            raise NotImplementedError(f"Audio inputs are not supported yet")
+            raise NotImplementedError("Audio inputs are not supported yet")
         mm_inputs = [create_hpu_mm_inputs(forward_batch)]
 
     else:
