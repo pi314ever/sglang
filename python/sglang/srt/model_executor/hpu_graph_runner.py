@@ -43,6 +43,9 @@ if _is_hpu:
 
     os.environ["PT_HPU_ENABLE_LAZY_COLLECTIVES"] = "true"
 
+    # Temporarily disabled due to accuracy issue in feature
+    os.environ["VLLM_FUSED_BLOCK_SOFTMAX_ADJUSTMENT"] = "false"
+
     from sglang.srt.hpu_utils import (
         PREFILL_BUCKET_STEP,
         SKIP_WARMUP,
