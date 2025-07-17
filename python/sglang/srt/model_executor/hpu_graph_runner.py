@@ -527,6 +527,7 @@ class HPUGraphRunner:
             self.model_runner.attn_backend,
             self.model_runner.token_to_kv_pool,
         )
+
         self.model_runner.attn_backend.init_forward_metadata(forward_batch)
         for i in range(3):
             self.model.forward(

@@ -62,7 +62,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) python -m uv build --wheel -Cbuild-dir=build
 
 ## Development Environment Setup
 
-Use Docker to set up the development environment. See [Docker setup guide](https://github.com/sgl-project/sglang/blob/main/docs/developer/development_guide_using_docker.md#setup-docker-container).
+Use Docker to set up the development environment. See [Docker setup guide](https://github.com/sgl-project/sglang/blob/main/docs/references/development_guide_using_docker.md#setup-docker-container).
 
 Create and enter development container:
 ```bash
@@ -179,28 +179,6 @@ To use this with your library functions, simply wrap them with make_pytorch_shim
  */
  m.impl("fwd", torch::kCUDA, make_pytorch_shim(&mha_fwd));
 ```
-
-#### Build with [ccache](https://github.com/ccache/ccache)
-```bash
-# or `yum install -y ccache`.
-apt-get install -y ccache
-# Building with ccache is enabled when ccache is installed and CCACHE_DIR is set.
-export CCACHE_DIR=/path/to/your/ccache/dir
-export CCACHE_BACKEND=""
-export CCACHE_KEEP_LOCAL_STORAGE="TRUE"
-unset CCACHE_READONLY
-python -m uv build --wheel -Cbuild-dir=build --color=always .
-```
-
-> When encountering this error while compiling using ccache: `ImportError: /usr/local/lib/python3.10/dist-packages/sgl_kernel/common_ops.abi3.so: undefined symbol: _ZN3c108ListType3getERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS_4Type24SingletonOrSharedTypePtrIS9_EE`, please modify the last command as follows to resolve it: `python3 -m uv build --wheel -Cbuild-dir=build . --color=always --no-build-isolation` .
-
-##### Configuring CMake Build Options
-Cmake options can be configuring by adding `-Ccmake.define.<option>=<value>` to the `uv build` flags.
-For example, to enable building FP4 kernels, use:
-```bash
-python -m uv build --wheel -Cbuild-dir=build -Ccmake.define.SGL_KERNEL_ENABLE_FP4=1 --color=always .
-```
-See CMakeLists.txt for more options.
 
 ### Testing & Benchmarking
 

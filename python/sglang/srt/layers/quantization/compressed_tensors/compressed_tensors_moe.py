@@ -14,15 +14,19 @@ from sglang.srt.layers.quantization.fp8_kernel import is_fp8_fnuz, scaled_fp8_qu
 from sglang.srt.layers.quantization.fp8_utils import normalize_e4m3fn_to_e4m3fnuz
 from sglang.srt.layers.quantization.utils import (
     all_close_1d,
+    cpu_has_amx_support,
     per_tensor_dequantize,
     replace_parameter,
 )
-from sglang.srt.utils import is_cuda, is_hpu, set_weight_attrs
+from sglang.srt.utils import is_cpu, is_cuda, is_hpu, is_npu, set_weight_attrs
 
 _is_cuda = is_cuda()
+_is_npu = is_npu()
+_is_cpu_amx_available = cpu_has_amx_support()
+_is_cpu = is_cpu()
 _is_hpu = is_hpu()
 
-if not (_is_cuda or _is_hpu):
+if not (_is_cuda or _is_npu or (_is_cpu and _is_cpu_amx_available) or _is_hpu):
     from vllm import _custom_ops as vllm_ops
     from vllm._custom_ops import scaled_fp8_quant
 
@@ -278,6 +282,7 @@ class CompressedTensorsW8A8Fp8MoEMethod(CompressedTensorsMoEMethod):
         use_grouped_topk: bool = False,
         topk_group: Optional[int] = None,
         num_expert_group: Optional[int] = None,
+        num_fused_shared_experts: int = 0,
         global_num_experts: int = -1,
         expert_map: Optional[torch.Tensor] = None,
         custom_routing_function: Optional[Callable] = None,
@@ -300,6 +305,7 @@ class CompressedTensorsW8A8Fp8MoEMethod(CompressedTensorsMoEMethod):
             renormalize=renormalize,
             topk_group=topk_group,
             num_expert_group=num_expert_group,
+            num_fused_shared_experts=num_fused_shared_experts,
             custom_routing_function=custom_routing_function,
             correction_bias=correction_bias,
             routed_scaling_factor=routed_scaling_factor,
@@ -321,6 +327,7 @@ class CompressedTensorsW8A8Fp8MoEMethod(CompressedTensorsMoEMethod):
             a1_scale=layer.w13_input_scale,
             a2_scale=layer.w2_input_scale,
             apply_router_weight_on_input=apply_router_weight_on_input,
+            routed_scaling_factor=routed_scaling_factor,
         )
 
 
@@ -638,6 +645,7 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
         use_grouped_topk: bool = False,
         topk_group: Optional[int] = None,
         num_expert_group: Optional[int] = None,
+        num_fused_shared_experts: int = 0,
         global_num_experts: int = -1,
         expert_map: Optional[torch.Tensor] = None,
         custom_routing_function: Optional[Callable] = None,
@@ -662,6 +670,7 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
             renormalize=renormalize,
             topk_group=topk_group,
             num_expert_group=num_expert_group,
+            num_fused_shared_experts=num_fused_shared_experts,
             custom_routing_function=custom_routing_function,
             scoring_func=scoring_func,
             correction_bias=correction_bias,
