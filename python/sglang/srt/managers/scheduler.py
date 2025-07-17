@@ -2479,6 +2479,8 @@ class Scheduler(
         if activities is None:
             activities = ["CPU", "GPU"]
             if _is_hpu:
+                # Remove GPU to enable HPU device traces
+                activities.remove("GPU")
                 activities.append("HPU")
 
         self.torch_profiler_output_dir = output_dir
