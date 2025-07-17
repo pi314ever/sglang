@@ -378,30 +378,6 @@ pub async fn startup(config: ServerConfig) -> std::io::Result<()> {
         }
     }
 
-    // Start the service discovery if enabled
-    if let Some(service_discovery_config) = config.service_discovery_config {
-        if service_discovery_config.enabled {
-            let worker_urls = Arc::clone(&app_state.router.get_worker_urls());
-
-            match start_service_discovery(service_discovery_config, worker_urls).await {
-                Ok(handle) => {
-                    info!("✅ Service discovery started successfully");
-
-                    // Spawn a task to handle the service discovery thread
-                    spawn(async move {
-                        if let Err(e) = handle.await {
-                            error!("Service discovery task failed: {:?}", e);
-                        }
-                    });
-                }
-                Err(e) => {
-                    error!("Failed to start service discovery: {}", e);
-                    warn!("Continuing without service discovery");
-                }
-            }
-        }
-    }
-
     info!("✅ Serving router on {}:{}", config.host, config.port);
     info!(
         "✅ Serving workers on {:?}",

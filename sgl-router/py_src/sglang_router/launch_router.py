@@ -238,34 +238,6 @@ class RouterArgs:
             default="127.0.0.1",
             help="Host address to bind the Prometheus metrics server",
         )
-        parser.add_argument(
-            f"--{prefix}log-dir",
-            type=str,
-            default=None,
-            help="Directory to store log files. If not specified, logs are only output to console.",
-        )
-        parser.add_argument(
-            f"--{prefix}service-discovery",
-            action="store_true",
-            help="Enable Kubernetes service discovery",
-        )
-        parser.add_argument(
-            f"--{prefix}selector",
-            type=str,
-            nargs="+",
-            help="Label selector for Kubernetes service discovery (format: key1=value1 key2=value2)",
-        )
-        parser.add_argument(
-            f"--{prefix}service-discovery-port",
-            type=int,
-            default=RouterArgs.service_discovery_port,
-            help="Port to use for discovered worker pods",
-        )
-        parser.add_argument(
-            f"--{prefix}service-discovery-namespace",
-            type=str,
-            help="Kubernetes namespace to watch for pods. If not provided, watches all namespaces (requires cluster-wide permissions)",
-        )
 
     @classmethod
     def from_cli_args(
