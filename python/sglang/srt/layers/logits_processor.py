@@ -41,7 +41,10 @@ from sglang.srt.model_executor.forward_batch_info import (
     ForwardBatch,
     ForwardMode,
 )
-from sglang.srt.utils import dump_to_file, use_intel_amx_backend
+from sglang.srt.utils import dump_to_file, is_hpu, use_intel_amx_backend
+
+_is_hpu = is_hpu()
+
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +119,9 @@ class LogitsMetadata:
 
     @classmethod
     def from_forward_batch(cls, forward_batch: ForwardBatch):
+        extend_seq_lens_cpu = forward_batch.extend_seq_lens_cpu
+        extend_logprob_start_lens_cpu = forward_batch.extend_logprob_start_lens_cpu
+
         if (
             forward_batch.forward_mode.is_extend()
             and forward_batch.return_logprob
@@ -129,9 +135,14 @@ class LogitsMetadata:
             )
             extend_return_logprob = False
             extend_logprob_pruned_lens_cpu = []
+
+            if _is_hpu:
+                extend_seq_lens_cpu = extend_seq_lens_cpu.tolist()
+                extend_logprob_start_lens_cpu = extend_logprob_start_lens_cpu.tolist()
+
             for extend_len, start_len in zip(
-                forward_batch.extend_seq_lens_cpu,
-                forward_batch.extend_logprob_start_lens_cpu,
+                extend_seq_lens_cpu,
+                extend_logprob_start_lens_cpu,
             ):
                 if extend_len - start_len > 0:
                     extend_return_logprob = True
@@ -148,8 +159,8 @@ class LogitsMetadata:
             extend_return_top_logprob=extend_return_top_logprob,
             extend_token_ids_logprob=extend_token_ids_logprob,
             extend_seq_lens=forward_batch.extend_seq_lens,
-            extend_seq_lens_cpu=forward_batch.extend_seq_lens_cpu,
-            extend_logprob_start_lens_cpu=forward_batch.extend_logprob_start_lens_cpu,
+            extend_seq_lens_cpu=extend_seq_lens_cpu,
+            extend_logprob_start_lens_cpu=extend_logprob_start_lens_cpu,
             extend_logprob_pruned_lens_cpu=extend_logprob_pruned_lens_cpu,
             top_logprobs_nums=forward_batch.top_logprobs_nums,
             token_ids_logprobs=forward_batch.token_ids_logprobs,

@@ -188,6 +188,18 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         extend_seq_lens_padded = to_hpu_and_pad_1d(
             forward_batch.extend_seq_lens, max_prefill_seqs - batch_size
         )
+        extend_seq_lens_hpu = torch.tensor(
+            forward_batch.extend_seq_lens_cpu, device="hpu", dtype=torch.int32
+        )
+        extend_seq_lens_hpu_padded = to_hpu_and_pad_1d(
+            extend_seq_lens_hpu, max_prefill_seqs - batch_size
+        )
+        extend_logprob_start_lens_hpu = torch.tensor(
+            forward_batch.extend_logprob_start_lens_cpu, device="hpu", dtype=torch.int32
+        )
+        extend_logprob_start_lens_hpu_padded = to_hpu_and_pad_1d(
+            extend_logprob_start_lens_hpu, max_prefill_seqs - batch_size
+        )
         out_cache_loc = to_hpu_and_pad_1d(forward_batch.out_cache_loc, padding_len)
         batch_size = 1
         block_list = (
@@ -230,6 +242,9 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         block_usage = forward_batch.hpu_metadata.block_usage.to("hpu")
         use_contiguous_pa = forward_batch.hpu_metadata.use_contiguous_pa
 
+        extend_seq_lens_hpu_padded = None
+        extend_logprob_start_lens_hpu_padded = None
+
     if forward_batch.contains_mm_inputs():
         if forward_batch.contains_audio_inputs():
             raise NotImplementedError(f"Audio inputs are not supported yet")
@@ -264,8 +279,8 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         return_logprob=forward_batch.return_logprob,
         top_logprobs_nums=forward_batch.top_logprobs_nums,
         token_ids_logprobs=forward_batch.token_ids_logprobs,
-        extend_seq_lens_cpu=forward_batch.extend_seq_lens_cpu,
-        extend_logprob_start_lens_cpu=forward_batch.extend_logprob_start_lens_cpu,
+        extend_seq_lens_cpu=extend_seq_lens_hpu_padded,
+        extend_logprob_start_lens_cpu=extend_logprob_start_lens_hpu_padded,
         extend_input_logprob_token_ids_gpu=forward_batch.extend_input_logprob_token_ids_gpu,
         global_num_tokens_gpu=forward_batch.global_num_tokens_gpu,
         dp_local_start_pos=forward_batch.dp_local_start_pos,
@@ -284,6 +299,7 @@ def create_hpu_dummy_batch_prefill(
     max_running_requests,
     attn_backend,
     token_to_kv_pool,
+    disable_prefix_cache=False,
 ):
     seq_len = prefix_len + prompt_len
     return HPUForwardBatch(
@@ -303,6 +319,16 @@ def create_hpu_dummy_batch_prefill(
             dtype=torch.int32,
             device="hpu",
         ),
+        extend_seq_lens_cpu=torch.ones(
+            max_running_requests,
+            dtype=torch.int32,
+            device="hpu",
+        ),
+        extend_logprob_start_lens_cpu=torch.ones(
+            max_running_requests,
+            dtype=torch.int32,
+            device="hpu",
+        ),
         page_size=page_size,
         block_list=torch.zeros(
             prefix_len // page_size, dtype=torch.int64, device="hpu"
@@ -312,7 +338,7 @@ def create_hpu_dummy_batch_prefill(
         block_usage=None,
         attn_backend=attn_backend,
         token_to_kv_pool=token_to_kv_pool,
-        use_contiguous_pa=False,
+        use_contiguous_pa=USE_CONTIGUOUS_PA and disable_prefix_cache,
         mm_inputs=None,
     )
 
@@ -526,6 +552,7 @@ class HPUGraphRunner:
             self.model_runner.server_args.max_running_requests,
             self.model_runner.attn_backend,
             self.model_runner.token_to_kv_pool,
+            disable_prefix_cache=self.model_runner.server_args.disable_radix_cache,
         )
 
         self.model_runner.attn_backend.init_forward_metadata(forward_batch)
