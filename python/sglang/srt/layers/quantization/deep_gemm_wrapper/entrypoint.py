@@ -27,7 +27,9 @@ if ENABLE_JIT_DEEPGEMM:
         )
     else:
         from deep_gemm import gemm_fp8_fp8_bf16_nt as _gemm_nt_f8f8bf16_raw
-        from deep_gemm import get_col_major_tma_aligned_tensor
+        from deep_gemm import (
+            get_col_major_tma_aligned_tensor,
+        )
         from deep_gemm import (
             m_grouped_gemm_fp8_fp8_bf16_nt_contiguous as _grouped_gemm_nt_f8f8bf16_contig_raw,
         )

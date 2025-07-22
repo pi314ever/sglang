@@ -14,8 +14,7 @@ from PIL import Image
 from transformers import BaseImageProcessorFast
 
 from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
-from sglang.srt.utils import encode_video, load_audio, load_image, is_hpu
-
+from sglang.srt.utils import encode_video, is_hpu, load_audio, load_image
 
 _is_hpu = is_hpu()
 

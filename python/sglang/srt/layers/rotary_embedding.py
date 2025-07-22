@@ -969,12 +969,8 @@ class Llama4VisionRotaryEmbedding(RotaryEmbedding):
         k_rotated_imag = k_real * sin_cache + k_imag * cos_cache
 
         # Re-stack the rotated components into a last dimension of size 2.
-        q_rotated = torch.stack(
-            [q_rotated_real, q_rotated_imag], dim=-1
-        )
-        k_rotated = torch.stack(
-            [k_rotated_real, k_rotated_imag], dim=-1
-        )
+        q_rotated = torch.stack([q_rotated_real, q_rotated_imag], dim=-1)
+        k_rotated = torch.stack([k_rotated_real, k_rotated_imag], dim=-1)
 
         # Flatten the last two dimensions to match the original output shape.
         # Flatten back to the desired shape (e.g., collapse the last two dimensions).
