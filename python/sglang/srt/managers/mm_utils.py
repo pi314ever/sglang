@@ -558,13 +558,17 @@ def general_mm_embed_routine(
         ]
         extend_prefix_lens = [
             prefix_len
-            for i, prefix_len in enumerate(forward_batch.extend_prefix_lens_cpu)
-            if forward_batch.mm_inputs[i] is not None
+            for mm_input, prefix_len in zip(
+                forward_batch.mm_inputs, forward_batch.extend_prefix_lens_cpu
+            )
+            if mm_input is not None
         ]
         extend_seq_lens = [
             seq_len
-            for i, seq_len in enumerate(forward_batch.extend_seq_lens_cpu)
-            if forward_batch.mm_inputs[i] is not None
+            for mm_input, seq_len in zip(
+                forward_batch.mm_inputs, forward_batch.extend_seq_lens_cpu
+            )
+            if mm_input is not None
         ]
         inputs_embeds = embed_mm_inputs(
             mm_inputs_list=mm_inputs_list,
