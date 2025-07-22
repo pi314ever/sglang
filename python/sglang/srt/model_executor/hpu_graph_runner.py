@@ -40,7 +40,6 @@ from sglang.srt.utils import get_device_name, is_hpu
 
 _is_hpu = is_hpu()
 if _is_hpu:
-
     os.environ["PT_HPU_ENABLE_LAZY_COLLECTIVES"] = "true"
 
     # Temporarily disabled due to accuracy issue in feature
@@ -135,7 +134,7 @@ HPUForwardBatchBase = namedtuple(
 HPUMultimodalInputs = namedtuple(
     "HPUMultimodalInputs",
     [field.name for field in MultimodalInputs.__dataclass_fields__.values()],
-    defaults=[None] * 12,
+    defaults=[None] * (len(MultimodalInputs.__dataclass_fields__.values()) - 1),
 )
 
 HPUMultimodalDataItemBase = namedtuple(
@@ -145,7 +144,6 @@ HPUMultimodalDataItemBase = namedtuple(
 
 
 class HPUForwardBatch(HPUForwardBatchBase):
-
     def contains_mm_inputs(self):
         return self.mm_inputs is not None
 
@@ -199,27 +197,35 @@ def create_hpu_mm_inputs(forward_batch: ForwardBatch) -> HPUMultimodalInputs:
             modality=data_item.modality,
             hash=data_item.hash,
             pad_value=data_item.pad_value,
-            aspect_ratio_id=maybe_to_hpu(data_item.aspect_ratio_id),
-            aspect_ratio_mask=maybe_to_hpu(data_item.aspect_ratio_mask),
             image_sizes=data_item.image_sizes,
             image_offsets=data_item.image_offsets,
             pixel_values=maybe_to_hpu(data_item.pixel_values),
-            image_grid_thws=maybe_to_hpu(data_item.image_grid_thws),
-            video_grid_thws=maybe_to_hpu(data_item.video_grid_thws),
-            image_emb_mask=maybe_to_hpu(data_item.image_emb_mask),
-            image_spatial_crop=maybe_to_hpu(data_item.image_spatial_crop),
-            second_per_grid_ts=(
-                list(maybe_to_hpu(item) for item in data_item.second_per_grid_ts)
-                if data_item.second_per_grid_ts is not None
-                else None
-            ),
-            tgt_size=data_item.tgt_size,
             audio_features=maybe_to_hpu(data_item.audio_features),
             audio_feature_lens=(
                 list(maybe_to_hpu(item) for item in data_item.audio_feature_lens)
                 if data_item.audio_feature_lens is not None
                 else None
             ),
+            audio_offsets=maybe_to_hpu(data_item.audio_offsets),
+            precomputed_features=maybe_to_hpu(data_item.precomputed_features),
+            image_grid_thw=maybe_to_hpu(data_item.image_grid_thw),
+            second_per_grid_ts=(
+                list(maybe_to_hpu(item) for item in data_item.second_per_grid_ts)
+                if data_item.second_per_grid_ts is not None
+                else None
+            ),
+            image_emb_mask=maybe_to_hpu(data_item.image_emb_mask),
+            image_spatial_crop=maybe_to_hpu(data_item.image_spatial_crop),
+            tgt_size=data_item.tgt_size,
+            aspect_ratio_id=maybe_to_hpu(data_item.aspect_ratio_id),
+            aspect_ratio_mask=maybe_to_hpu(data_item.aspect_ratio_mask),
+            image_grid_hws=(
+                list(maybe_to_hpu(item) for item in data_item.image_grid_hws)
+                if data_item.image_grid_hws is not None
+                else None
+            ),
+            input_features=maybe_to_hpu(data_item.input_features),
+            input_features_mask=maybe_to_hpu(data_item.input_features_mask),
         )
     ]
 
@@ -241,9 +247,9 @@ def create_hpu_mm_inputs(forward_batch: ForwardBatch) -> HPUMultimodalInputs:
 
 
 def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRunner):
-    assert (
-        forward_batch.hpu_metadata is not None
-    ), "Expected HPU Metadata for HPU forward batch"
+    assert forward_batch.hpu_metadata is not None, (
+        "Expected HPU Metadata for HPU forward batch"
+    )
     batch_size = forward_batch.batch_size
     page_size = model_runner.token_to_kv_pool_allocator.page_size
     if forward_batch.forward_mode.is_extend():
@@ -340,6 +346,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         block_usage = forward_batch.hpu_metadata.block_usage.to("hpu")
         use_contiguous_pa = forward_batch.hpu_metadata.use_contiguous_pa
 
+        extend_prefix_lens_hpu_padded = None
         extend_seq_lens_hpu_padded = None
         extend_logprob_start_lens_hpu_padded = None
 
@@ -476,7 +483,6 @@ def create_hpu_dummy_batch_decode(
 
 
 class HPUAdapter:
-
     def __init__(self, model, dtype) -> None:
         self.model = model
         self.dtype = dtype
