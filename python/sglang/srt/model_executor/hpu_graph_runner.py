@@ -247,9 +247,9 @@ def create_hpu_mm_inputs(forward_batch: ForwardBatch) -> HPUMultimodalInputs:
 
 
 def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRunner):
-    assert forward_batch.hpu_metadata is not None, (
-        "Expected HPU Metadata for HPU forward batch"
-    )
+    assert (
+        forward_batch.hpu_metadata is not None
+    ), "Expected HPU Metadata for HPU forward batch"
     batch_size = forward_batch.batch_size
     page_size = model_runner.token_to_kv_pool_allocator.page_size
     if forward_batch.forward_mode.is_extend():
