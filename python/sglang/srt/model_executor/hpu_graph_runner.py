@@ -421,6 +421,17 @@ class HPUGraphRunner:
 
         self.is_lazy = 1 if htorch.utils.internal.is_lazy() else 0
         if self.is_lazy:
+            hidden_layer_markstep_interval = int(
+                os.getenv("SGLANG_CONFIG_HIDDEN_LAYERS", "1")
+            )
+            modify_model_layers(
+                self.model_runner.model,
+                get_target_layer_suffix_list(
+                    model_runner.model_config.hf_config.model_type
+                ),
+                hidden_layer_markstep_interval,
+            )
+
             self.model = htorch.hpu.wrap_in_hpu_graph(
                 HPUAdapter(self.model_runner.model, self.model_runner.dtype),
                 disable_tensor_cache=True,
@@ -637,3 +648,40 @@ class HPUGraphRunner:
         if not skip_attn_backend_init:
             self.model_runner.attn_backend.init_forward_metadata(forward_batch)
         return self._forward(forward_batch)
+
+
+def get_target_layer_suffix_list(model_type) -> list[str]:
+    # This sets the suffix for the hidden layer name, which is controlled by
+    # SGLANG_CONFIG_HIDDEN_LAYERS. The default suffix is "DecoderLayer," which is
+    # applicable for most language models such as LLaMA, Qwen, and BART. If the
+    # model's decoder layer name differs from the default, it will need to
+    # be specified here.
+    decoder_layer_table = {
+        "gpt_bigcode": "BigCodeBlock",
+    }
+
+    return [decoder_layer_table.get(model_type, "DecoderLayer"), "EncoderLayer"]
+
+
+def modify_model_layers(
+    module: torch.nn.Module, suffix_list: list[str], n=1, counter=None
+):
+    """Currently add mark_step at the end of specified layers."""
+    import habana_frameworks.torch as htorch
+
+    def forward_hook(module, args, output):
+        htorch.core.mark_step()
+        return output
+
+    if counter is None:
+        counter = [0]
+
+    for child_name, child_module in module.named_children():
+        if any(
+            child_module.__class__.__name__.endswith(layer) for layer in suffix_list
+        ):
+            counter[0] += 1
+            if counter[0] % n == 0:
+                child_module.register_forward_hook(forward_hook)
+        else:
+            modify_model_layers(child_module, suffix_list, n, counter)
