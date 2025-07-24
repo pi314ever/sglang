@@ -1247,6 +1247,7 @@ def get_rope(
     rope_scaling: Optional[Dict[str, Any]] = None,
     dtype: Optional[torch.dtype] = None,
     partial_rotary_factor: float = 1.0,
+    device: Optional[str] = "cuda",
 ) -> RotaryEmbedding:
     if dtype is None:
         dtype = torch.get_default_dtype()
@@ -1398,6 +1399,7 @@ def get_rope(
                 is_neox_style,
                 scaling_factor,
                 dtype,
+                device=device,
                 **extra_kwargs,
             )
         elif scaling_type == "longrope":
@@ -1552,6 +1554,7 @@ def get_rope_wrapper(
             rope_scaling,
             dtype,
             partial_rotary_factor,
+            device,
         )
 
     return get_rope_cpu(

@@ -35,6 +35,7 @@ from sglang.srt.utils import (
     is_cpu,
     is_cuda,
     is_hip,
+    is_hpu,
     is_npu,
 )
 
@@ -44,6 +45,7 @@ _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
 _is_npu = is_npu()
+_is_hpu = is_hpu()
 
 if _is_cuda:
     from sgl_kernel import moe_fused_gate
@@ -421,58 +423,6 @@ def is_power_of_two(n):
     return n > 0 and math.log2(n).is_integer()
 
 
-def biased_grouped_topk(
-    hidden_states: torch.Tensor,
-    gating_output: torch.Tensor,
-    correction_bias: torch.Tensor,
-    topk: int,
-    renormalize: bool,
-    num_expert_group: int = 0,
-    topk_group: int = 0,
-    compiled: bool = True,
-    n_share_experts_fusion: int = 0,
-    routed_scaling_factor: Optional[float] = None,
-):
-    assert (
-        routed_scaling_factor is not None
-    ), "routed_scaling_factor is required for biased_grouped_topk"
-    # TODO: moe_fused_gate kernel is not supported for n_share_experts_fusion > 0 now.
-    if (
-        _is_cuda
-        and gating_output.shape[1] // num_expert_group
-        <= 32  # moe_fused_gate kernel ensure that num_experts/num_expert_group does not exceed MAX_VPT=32 now. And when kernel can handle MAX_VPT > 32, we can remove this assertion.
-        and is_power_of_two(correction_bias.shape[0])
-    ):
-        return moe_fused_gate(
-            gating_output,
-            correction_bias,
-            num_expert_group,
-            topk_group,
-            topk,
-            n_share_experts_fusion,
-            routed_scaling_factor,
-        )
-    else:
-        biased_grouped_topk_fn = (
-            torch.compile(
-                biased_grouped_topk_impl, dynamic=True, backend=get_compiler_backend()
-            )
-            if compiled
-            else biased_grouped_topk_impl
-        )
-        return biased_grouped_topk_fn(
-            hidden_states,
-            gating_output,
-            correction_bias,
-            topk,
-            renormalize,
-            num_expert_group,
-            topk_group,
-            n_share_experts_fusion=n_share_experts_fusion,
-            routed_scaling_factor=routed_scaling_factor,
-        )
-
-
 def select_experts(
     hidden_states: torch.Tensor,
     router_logits: torch.Tensor,
@@ -525,6 +475,7 @@ def select_experts(
                 topk_group=topk_group,
                 num_fused_shared_experts=num_fused_shared_experts,
                 routed_scaling_factor=routed_scaling_factor,
+                compiled=not _is_hpu,
                 num_token_non_padded=num_token_non_padded,
                 expert_location_dispatch_info=expert_location_dispatch_info,
             )

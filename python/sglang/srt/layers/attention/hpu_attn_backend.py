@@ -14,8 +14,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
+import habana_frameworks.torch as htorch
 import torch
 
 from sglang.srt.layers.attention.base_attn_backend import AttentionBackend
@@ -84,12 +86,9 @@ class HPUAttnBackend(AttentionBackend):
         query = q.view(1, -1, layer.tp_q_head_num, layer.qk_head_dim)
         key = k.view(1, -1, layer.tp_k_head_num, layer.qk_head_dim)
         value = v.view(1, -1, layer.tp_v_head_num, layer.v_head_dim)
-        key_cache = key_cache.view(
-            -1, forward_batch.page_size, layer.tp_k_head_num, layer.qk_head_dim
-        )
-        value_cache = value_cache.view(
-            -1, forward_batch.page_size, layer.tp_v_head_num, layer.v_head_dim
-        )
+
+        # No need to reshape kv cache, since the _include_past in
+        # vllm_hpu_extension will do that
 
         if forward_batch.use_contiguous_pa:
 
@@ -120,13 +119,18 @@ class HPUAttnBackend(AttentionBackend):
             softmax_op=self.softmax,
             matmul_av_op=self.matmul_av,
             fsdpa_op=self.fused_scaled_dot_product_attention,
-            block_list=forward_batch.block_list,
+            block_list=(
+                forward_batch.block_list
+                if forward_batch.block_list.numel() != 0
+                else None
+            ),
+            block_size=forward_batch.page_size,
             keys_fetch_func=fetch_key_cache,
             values_fetch_func=fetch_value_cache,
             key_cache=key_cache,
             value_cache=value_cache,
         )
-        output = output.reshape(q.shape)
+        output = output.reshape(-1, layer.tp_q_head_num * layer.v_head_dim)
 
         return output
 

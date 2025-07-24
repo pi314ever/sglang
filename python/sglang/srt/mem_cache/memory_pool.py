@@ -833,6 +833,12 @@ class MLATokenToKVPool(KVCache):
         self.page_size = page_size
 
         kv_size = self.get_kv_size_bytes()
+
+        # To make sure the kv cache is really allocated in hpu device memory
+        import habana_frameworks.torch as htorch
+
+        htorch.core.mark_step()
+        htorch.hpu.synchronize()
         logger.info(
             f"KV Cache is allocated. #tokens: {size}, KV size: {kv_size / GB:.2f} GB"
         )

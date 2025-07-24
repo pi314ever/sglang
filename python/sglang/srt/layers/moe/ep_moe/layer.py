@@ -67,16 +67,18 @@ from sglang.srt.utils import (
     dispose_tensor,
     get_bool_env_var,
     is_hip,
+    is_hpu,
     is_npu,
     set_weight_attrs,
 )
 
 _is_hip = is_hip()
 _is_npu = is_npu()
+_is_hpu = is_hpu()
 _is_fp8_fnuz = is_fp8_fnuz()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 
-if not _is_npu:
+if not _is_npu and not _is_hpu:
     from sgl_kernel import silu_and_mul
 
 if _is_hip:

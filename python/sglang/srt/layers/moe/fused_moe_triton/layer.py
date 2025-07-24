@@ -25,6 +25,7 @@ from sglang.srt.utils import (
     get_bool_env_var,
     is_cpu,
     is_hip,
+    is_hpu,
     set_weight_attrs,
     use_intel_amx_backend,
 )
@@ -37,6 +38,7 @@ else:
 import logging
 
 _is_hip = is_hip()
+_is_hpu = is_hpu()
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
@@ -557,6 +559,41 @@ class FusedMoE(torch.nn.Module):
             if self.quant_method.__class__.__name__ == "ModelOptNvFp4FusedMoEMethod":
                 self.quant_method.enable_flashinfer_moe = self.enable_flashinfer_moe
         assert self.quant_method is not None
+
+        if _is_hpu:
+            ep_rank = 0
+            num_experts = self.local_num_experts
+            ep_shift = ep_rank * num_experts
+            from vllm_hpu_extension.ops import (
+                VllmMixtureOfExpertsOp,
+                VllmMixtureOfExpertsOpFP8,
+                VllmMixtureOfExpertsOpFP8PerChannel,
+            )
+
+            experts_min, experts_max = ep_shift, num_experts + ep_shift - 1
+            if quant_config is None or isinstance(
+                self.quant_method, UnquantizedFusedMoEMethod
+            ):
+                moe_op = VllmMixtureOfExpertsOp(
+                    num_experts,
+                    experts_min,
+                    experts_max,
+                )
+            elif quant_config is not None:
+                if hasattr(quant_config, "weight_block_size"):
+                    moe_op = VllmMixtureOfExpertsOpFP8(
+                        num_experts,
+                        experts_min,
+                        experts_max,
+                    )
+                else:
+                    # TODO(qun) in the future, we may need this for perf
+                    moe_op = VllmMixtureOfExpertsOpFP8PerChannel(
+                        num_experts,
+                        experts_min,
+                        experts_max,
+                    )
+            self.moe_op = moe_op
 
         self.quant_method.create_weights(
             layer=self,

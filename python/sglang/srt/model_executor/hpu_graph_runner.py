@@ -93,6 +93,7 @@ HPUForwardBatchBase = namedtuple(
         "mm_inputs",
         "top_logprobs_nums",
         "token_ids_logprobs",
+        "extend_prefix_lens_cpu",
         "extend_seq_lens_cpu",
         "extend_logprob_start_lens_cpu",
         "extend_input_logprob_token_ids_gpu",
@@ -104,12 +105,14 @@ HPUForwardBatchBase = namedtuple(
         "global_num_tokens_for_logprob_gpu",
         "input_embeds",
         "return_logprob",
+        "can_run_tbo",
         "padded_static_len",
         "capture_hidden_mode",
     ],
     defaults=[
         None,  # top_logprobs_nums
         None,  # token_ids_logprobs
+        None,  # extend_prefix_lens_cpu
         None,  # extend_seq_lens_cpu
         None,  # extend_logprob_start_lens_cpu
         None,  # extend_input_logprob_token_ids_gpu
@@ -121,6 +124,7 @@ HPUForwardBatchBase = namedtuple(
         None,  # global_num_tokens_for_logprob_gpu
         None,  # input_embeds
         False,  # return_logprob
+        False,  # can_run_tbo
         -1,  # padded_static_len
         CaptureHiddenMode.NULL,  # capture_hidden_mode
     ],
@@ -279,6 +283,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         return_logprob=forward_batch.return_logprob,
         top_logprobs_nums=forward_batch.top_logprobs_nums,
         token_ids_logprobs=forward_batch.token_ids_logprobs,
+        extend_prefix_lens_cpu=forward_batch.extend_prefix_lens_cpu,
         extend_seq_lens_cpu=extend_seq_lens_hpu_padded,
         extend_logprob_start_lens_cpu=extend_logprob_start_lens_hpu_padded,
         extend_input_logprob_token_ids_gpu=forward_batch.extend_input_logprob_token_ids_gpu,
@@ -302,6 +307,10 @@ def create_hpu_dummy_batch_prefill(
     disable_prefix_cache=False,
 ):
     seq_len = prefix_len + prompt_len
+    extend_seq_lens = torch.ones(max_running_requests, dtype=torch.int32, device="hpu")
+    extend_prefix_lens = torch.full(
+        (max_running_requests,), prefix_len, dtype=torch.int32, device="hpu"
+    )
     return HPUForwardBatch(
         forward_mode=ForwardMode.EXTEND,
         batch_size=1,
@@ -314,16 +323,9 @@ def create_hpu_dummy_batch_prefill(
         kv_seq_pos=torch.zeros(1, seq_len, dtype=torch.int64, device="hpu"),
         kv_seq_idx=torch.zeros(1, seq_len, dtype=torch.int64, device="hpu"),
         valid_seq_len=torch.ones((), dtype=torch.int64, device="hpu"),
-        extend_seq_lens=torch.ones(
-            max_running_requests,
-            dtype=torch.int32,
-            device="hpu",
-        ),
-        extend_seq_lens_cpu=torch.ones(
-            max_running_requests,
-            dtype=torch.int32,
-            device="hpu",
-        ),
+        extend_seq_lens=extend_seq_lens,
+        extend_seq_lens_cpu=extend_seq_lens.tolist(),
+        extend_prefix_lens_cpu=extend_prefix_lens.tolist(),
         extend_logprob_start_lens_cpu=torch.ones(
             max_running_requests,
             dtype=torch.int32,

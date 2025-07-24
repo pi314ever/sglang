@@ -763,7 +763,8 @@ def compute_position_torch(
         axis=0,
     )
     extend_start_loc = torch.zeros_like(extend_seq_lens)
-    extend_start_loc[1:] = torch.cumsum(extend_seq_lens[:-1], dim=0)
+    if extend_seq_lens.shape[0] > 1:
+        extend_start_loc[1:] = torch.cumsum(extend_seq_lens[:-1], dim=0)
     return positions.to(torch.int64), extend_start_loc
 
 

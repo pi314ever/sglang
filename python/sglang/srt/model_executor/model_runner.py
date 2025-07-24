@@ -425,6 +425,7 @@ class ModelRunner:
                     "triton",
                     "flashmla",
                     "cutlass_mla",
+                    "hpu",
                     "ascend",
                 ]:
                     logger.info(

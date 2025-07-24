@@ -21,6 +21,7 @@ import os
 from enum import IntEnum, auto
 from typing import Any, Dict, Iterable, Optional, Tuple
 
+import habana_frameworks.torch as htorch
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -102,6 +103,7 @@ from sglang.srt.utils import (
     is_cpu,
     is_cuda,
     is_hip,
+    is_hpu,
     is_non_idle_and_non_empty,
     log_info_on_rank0,
     use_intel_amx_backend,
@@ -109,6 +111,7 @@ from sglang.srt.utils import (
 
 _is_hip = is_hip()
 _is_cuda = is_cuda()
+_is_hpu = is_hpu()
 _is_fp8_fnuz = is_fp8_fnuz()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 _is_cpu_amx_available = cpu_has_amx_support()
@@ -124,6 +127,8 @@ if _is_cuda:
         merge_state_v2,
     )
 elif _is_cpu and _is_cpu_amx_available:
+    pass
+elif _is_hpu:
     pass
 else:
     from vllm._custom_ops import awq_dequantize
@@ -982,7 +987,15 @@ class DeepseekV2AttentionMLA(nn.Module):
                 else:
                     return AttnForwardMethod.MLA
 
-        if self.attention_backend == "ascend":
+        if self.attention_backend == "hpu":
+            if (
+                forward_batch.forward_mode.is_extend()
+                and sum(forward_batch.extend_prefix_lens_cpu) == 0
+            ):
+                return AttnForwardMethod.MHA
+            else:
+                return AttnForwardMethod.MLA
+        elif self.attention_backend == "ascend":
             return AttnForwardMethod.MLA
         elif self.attention_backend == "flashinfer":
             # Flashinfer MLA: Do not absorb when enabling ragged prefill
@@ -1241,13 +1254,19 @@ class DeepseekV2AttentionMLA(nn.Module):
                 q_nope.to(torch.bfloat16).transpose(0, 1),
                 self.w_kc.to(torch.bfloat16) * self.w_scale,
             )
-        elif self.w_kc.dtype == torch.float8_e4m3fn:
+        elif self.w_kc.dtype == torch.float8_e4m3fn and not _is_hpu:
             q_nope_val, q_nope_scale = per_tensor_quant_mla_fp8(
                 q_nope.transpose(0, 1),
                 zero_allocator.allocate(1),
             )
             q_nope_out = bmm_fp8(
                 q_nope_val, self.w_kc, q_nope_scale, self.w_scale, torch.bfloat16
+            )
+        elif self.w_kc.dtype == torch.float8_e4m3fn and _is_hpu:
+            # TODO(hpu): add bmm_fp8 for hpu
+            q_nope_out = torch.bmm(
+                q_nope.to(torch.bfloat16).transpose(0, 1),
+                self.w_kc.to(torch.bfloat16) * self.w_scale,
             )
         else:
             q_nope_out = torch.bmm(q_nope.transpose(0, 1), self.w_kc)
@@ -1300,7 +1319,7 @@ class DeepseekV2AttentionMLA(nn.Module):
                 self.w_vc.to(torch.bfloat16) * self.w_scale,
             )
             attn_bmm_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
-        elif self.w_vc.dtype == torch.float8_e4m3fn:
+        elif self.w_vc.dtype == torch.float8_e4m3fn and not _is_hpu:
             attn_output_val, attn_output_scale = per_tensor_quant_mla_fp8(
                 attn_output.transpose(0, 1),
                 zero_allocator.allocate(1),
@@ -1311,6 +1330,13 @@ class DeepseekV2AttentionMLA(nn.Module):
                 attn_output_scale,
                 self.w_scale,
                 torch.bfloat16,
+            )
+            attn_bmm_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
+        elif self.w_vc.dtype == torch.float8_e4m3fn and _is_hpu:
+            # TODO(hpu): add bmm_fp8 for hpu
+            attn_bmm_output = torch.bmm(
+                attn_output.to(torch.bfloat16).transpose(0, 1),
+                self.w_vc.to(torch.bfloat16) * self.w_scale,
             )
             attn_bmm_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
         else:
@@ -2286,6 +2312,9 @@ class DeepseekV2ForCausalLM(nn.Module):
                 self_attn.w_vc = bind_or_assign(self_attn.w_vc, w_vc.contiguous())
                 self_attn.use_deep_gemm_bmm = True
 
+            htorch.core.mark_step()
+            htorch.hpu.synchronize()
+
         if (
             deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
             and deep_gemm_wrapper.DEEPGEMM_SCALE_UE8M0
@@ -2371,7 +2400,7 @@ class DeepseekV2ForCausalLM(nn.Module):
             ("gate_up_proj", "gate_proj", 0),
             ("gate_up_proj", "up_proj", 1),
         ]
-        if self.n_share_experts_fusion > 0:
+        if self.num_fused_shared_experts > 0:
             weights_list = list(weights)
             weights_dict = dict(weights_list)
             if self.quant_config is None or self.quant_config.get_name() == "w8a8_int8":
@@ -2406,14 +2435,14 @@ class DeepseekV2ForCausalLM(nn.Module):
 
             for moe_layer in tqdm(
                 moe_layers,
-                desc=f"Cloning {self.n_share_experts_fusion} "
+                desc=f"Cloning {self.num_fused_shared_experts} "
                 "replicas of the shared expert into MoE",
             ):
                 for suffix in suffix_list:
                     shared_expert_weight_name = (
                         f"model.layers.{moe_layer}.mlp.shared_experts.{suffix}"
                     )
-                    for num_repeat in range(self.n_share_experts_fusion):
+                    for num_repeat in range(self.num_fused_shared_experts):
                         weights_list.append(
                             (
                                 f"model.layers.{moe_layer}."
@@ -2602,6 +2631,9 @@ class DeepseekV2ForCausalLM(nn.Module):
                             param, "weight_loader", default_weight_loader
                         )
                         weight_loader(param, loaded_weight)
+
+            htorch.core.mark_step()
+            htorch.hpu.synchronize()
 
         self.post_load_weights(is_nextn=is_nextn, weight_names=weight_names)
 

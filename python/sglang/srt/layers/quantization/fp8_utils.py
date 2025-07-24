@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Callable, List, Optional, Tuple
 
 import torch
@@ -32,8 +33,10 @@ from sglang.srt.utils import (
     is_cuda,
     is_flashinfer_available,
     is_hip,
+    is_hpu,
 )
 
+_is_hpu = is_hpu()
 _is_hip = is_hip()
 _is_cuda = is_cuda()
 _is_fp8_fnuz = is_fp8_fnuz()
@@ -48,6 +51,14 @@ if _use_aiter:
 
 if _is_cuda:
     from sgl_kernel import fp8_blockwise_scaled_mm, fp8_scaled_mm
+
+
+@lru_cache()
+def is_gaudi2():
+    import habana_frameworks.torch as htorch
+
+    return htorch.hpu.get_device_name() == "GAUDI2"
+
 
 use_vllm_cutlass_w8a8_fp8_kernel = get_bool_env_var("USE_VLLM_CUTLASS_W8A8_FP8_KERNEL")
 
@@ -317,6 +328,9 @@ def input_to_float8(
     if _is_fp8_fnuz:
         dtype = fp8_dtype
         fp_max = fp8_max
+    elif _is_hpu and is_gaudi2():
+        # https://docs.habana.ai/en/latest/PyTorch/Reference/Debugging_Guide/Model_Troubleshooting.html#using-torch-float8-e4m3fn-on-gaudi-2
+        fp_max = 240.0
     else:
         finfo = torch.finfo(dtype)
         fp_max = finfo.max

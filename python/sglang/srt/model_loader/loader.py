@@ -431,9 +431,17 @@ class DefaultModelLoader(BaseModelLoader):
 
     @staticmethod
     def load_weights_and_postprocess(model, weights, target_device):
+        import habana_frameworks.torch as htorch
+
+        htorch.core.mark_step()
+        htorch.hpu.synchronize()
+
         model.load_weights(weights)
 
-        for _, module in model.named_modules():
+        htorch.core.mark_step()
+        htorch.hpu.synchronize()
+
+        for name, module in model.named_modules():
             quant_method = getattr(module, "quant_method", None)
             if quant_method is not None:
                 # When quant methods need to process weights after loading
@@ -443,6 +451,8 @@ class DefaultModelLoader(BaseModelLoader):
                 # parameters onto device for processing and back off after.
                 with device_loading_context(module, target_device):
                     quant_method.process_weights_after_loading(module)
+                    htorch.core.mark_step()
+                    htorch.hpu.synchronize()
 
 
 class LayeredModelLoader(DefaultModelLoader):

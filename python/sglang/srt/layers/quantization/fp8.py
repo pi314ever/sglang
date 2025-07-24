@@ -100,6 +100,10 @@ if not (_is_cuda or _is_npu or (_is_cpu and _is_cpu_amx_available) or _is_hpu):
     from vllm._custom_ops import scaled_fp8_quant
 
 
+if _is_hpu:
+    import vllm_hpu_extension.ops as hpu_ops
+    from vllm_hpu_extension.ops import scaled_fp8_quant
+
 ACTIVATION_SCHEMES = ["static", "dynamic"]
 
 logger = logging.getLogger(__name__)
@@ -265,6 +269,7 @@ class Fp8LinearMethod(LinearMethodBase):
         layer.input_size_per_partition = input_size_per_partition
         layer.output_size_per_partition = output_size_per_partition
         layer.orig_dtype = params_dtype
+        layer.quant_config = self.quant_config
 
         # WEIGHT
         weight_dtype = (
@@ -324,6 +329,12 @@ class Fp8LinearMethod(LinearMethodBase):
     def process_weights_after_loading(self, layer: Module) -> None:
         # Block quant doesn't need to process weights after loading
         if self.block_quant:
+            if _is_hpu:
+                # TODO(qun) may need force channel fp8 in future for perf
+                # optimization.
+                layer = hpu_ops.fp8_block_linear_postprocess_weights(layer, False)
+                return
+
             # If ROCm, normalize the weights and scales to e4m3fnuz
             if _is_fp8_fnuz:
                 # activation_scheme: dynamic
@@ -436,6 +447,16 @@ class Fp8LinearMethod(LinearMethodBase):
             )
 
         if self.block_quant:
+            if _is_hpu:
+                return hpu_ops.apply_block_fp8_linear_hpu(
+                    input=x,
+                    layer=layer,
+                    block_size=self.quant_config.weight_block_size,
+                    bias=bias,
+                    do_unpad=True,
+                    force_channel_fp8=False,
+                )
+
             if use_intel_amx_backend(layer):
                 return torch.ops.sgl_kernel.fp8_scaled_mm_cpu(
                     x,
@@ -513,6 +534,8 @@ class Fp8MoEMethod:
         **extra_weight_attrs,
     ):
         from sglang.srt.layers.moe.fused_moe_triton import FusedMoeWeightScaleSupported
+
+        layer.quant_config = self.quant_config
 
         if self.quant_config.is_checkpoint_fp8_serialized:
             params_dtype = torch.uint32 if _use_hip_int4 else torch.float8_e4m3fn
@@ -734,6 +757,12 @@ class Fp8MoEMethod:
 
         # Block quant doesn't need to process weights after loading
         if self.block_quant:
+            if _is_hpu:
+                import vllm_hpu_extension.ops as hpu_ops
+
+                layer = hpu_ops.fp8_block_moe_prepare_weights(layer, False)
+                return
+
             # If ROCm, normalize the weights and scales to e4m3fnuz
             if _is_fp8_fnuz:
                 # activation_scheme: dynamic
@@ -981,6 +1010,21 @@ class Fp8MoEMethod:
         no_combine: bool = False,
         routed_scaling_factor: Optional[float] = None,
     ) -> torch.Tensor:
+        if _is_hpu:
+            return self.forward_hpu(
+                layer,
+                x,
+                use_grouped_topk,
+                top_k,
+                router_logits,
+                renormalize,
+                topk_group=topk_group,
+                num_expert_group=num_expert_group,
+                custom_routing_function=custom_routing_function,
+                correction_bias=correction_bias,
+                routed_scaling_factor=routed_scaling_factor,
+            )
+
         from sglang.srt.layers.moe.fused_moe_triton.fused_moe import fused_experts
         from sglang.srt.layers.moe.topk import select_experts
 
@@ -1148,6 +1192,48 @@ class Fp8MoEMethod:
                     ),
                 )
         return None
+
+    def forward_hpu(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        use_grouped_topk: bool,
+        top_k: int,
+        router_logits: torch.Tensor,
+        renormalize: bool,
+        topk_group: Optional[int] = None,
+        num_expert_group: Optional[int] = None,
+        custom_routing_function: Optional[Callable] = None,
+        correction_bias: Optional[torch.Tensor] = None,
+        routed_scaling_factor: Optional[float] = None,
+    ):
+        from sglang.srt.layers.moe.topk import select_experts
+
+        assert len(x.shape) == 2
+        topk_weights, topk_ids = select_experts(
+            hidden_states=x,
+            router_logits=router_logits,
+            use_grouped_topk=use_grouped_topk,
+            top_k=top_k,
+            renormalize=renormalize,
+            topk_group=topk_group,
+            num_expert_group=num_expert_group,
+            custom_routing_function=custom_routing_function,
+            correction_bias=correction_bias,
+            routed_scaling_factor=routed_scaling_factor,
+        )
+
+        topk_ids = topk_ids.view(*x.shape[:-1], -1)
+        topk_weights = topk_weights.view(*x.shape[:-1], -1)
+        output = layer.moe_op(
+            x,
+            topk_ids.to(torch.int64),
+            topk_weights.to(x.dtype),
+            permuted_weights=True,
+            activation="silu",
+        )
+
+        return output.view(-1, x.shape[1])
 
 
 class Fp8KVCacheMethod(BaseKVCacheMethod):
