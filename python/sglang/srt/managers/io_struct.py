@@ -329,12 +329,12 @@ class GenerateReqInput:
             new_rids = [f"{self.rid}_{i}" for i in range(num)]
             self.rid = new_rids
         elif isinstance(self.rid, list):
-            # TODO: Fix me for HPU
-            # if len(self.rid) != num:
-            #     raise ValueError(
-            #         "The specified rids length mismatch with the batch_size for batch processing."
-            #     )
-            pass
+            # Note: the length of rid shall be the same as the batch_size,
+            # as the rid would be expanded for parallel sampling in tokenizer_manager
+            if len(self.rid) != self.batch_size:
+                raise ValueError(
+                    "The specified rids length mismatch with the batch_size for batch processing."
+                )
         else:
             raise ValueError("The rid should be a string or a list of strings.")
 

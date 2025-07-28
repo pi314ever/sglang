@@ -384,12 +384,12 @@ def throughput_test(
     )
     print("{:<40} {:<10}".format("Backend:", result["backend"]))
     print("{:<40} {:<10}".format("Successful requests:", result["successful_requests"]))
-    # if _is_hpu:
-    #     print(
-    #         "{:<40} {:<10.2f}".format(
-    #             "Warmup duration (s):", result["hpu_graph_warmup_time"]
-    #         )
-    #     )
+    if _is_hpu:
+        print(
+            "{:<40} {:<10.2f}".format(
+                "Warmup duration (s):", result["hpu_graph_warmup_time"]
+            )
+        )
     print("{:<40} {:<10.2f}".format("Benchmark duration (s):", result["total_latency"]))
     print("{:<40} {:<10}".format("Total input tokens:", result["total_input_tokens"]))
     print(

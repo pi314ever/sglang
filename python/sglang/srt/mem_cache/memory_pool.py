@@ -37,12 +37,19 @@ import triton.language as tl
 
 from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE
 from sglang.srt.layers.radix_attention import RadixAttention
-from sglang.srt.utils import debug_timing, get_bool_env_var, is_cuda, next_power_of_2
+from sglang.srt.utils import (
+    debug_timing,
+    get_bool_env_var,
+    is_cuda,
+    is_hpu,
+    next_power_of_2,
+)
 
 logger = logging.getLogger(__name__)
 
 GB = 1024 * 1024 * 1024
 _is_cuda = is_cuda()
+_is_hpu = is_hpu()
 
 
 class ReqToTokenPool:
@@ -249,11 +256,15 @@ class MHATokenToKVPool(KVCache):
                     )
                     for _ in range(self.layer_num)
                 ]
-        # TODO: Fix required for HPU: WA Added for move ahead!
+        # HPU doesn't support uint64 data
+        if _is_hpu:
+            self.native_device = "cpu"
+        else:
+            self.native_device = self.device
         self.data_ptrs = torch.tensor(
             [x.data_ptr() for x in self.k_buffer + self.v_buffer],
             dtype=torch.uint64,
-            device="cpu",
+            device=self.native_device,
         )
         self.data_strides = torch.tensor(
             [
