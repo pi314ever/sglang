@@ -36,7 +36,7 @@ from sglang.srt.model_executor.forward_batch_info import (
     ForwardBatch,
     ForwardMode,
 )
-from sglang.srt.utils import is_hpu
+from sglang.srt.utils import get_device_name, is_hpu
 
 _is_hpu = is_hpu()
 if _is_hpu:
@@ -46,6 +46,7 @@ if _is_hpu:
     # Temporarily disabled due to accuracy issue in feature
     os.environ["VLLM_FUSED_BLOCK_SOFTMAX_ADJUSTMENT"] = "false"
 
+    from sglang.srt import hpu_utils
     from sglang.srt.hpu_utils import (
         PREFILL_BUCKET_STEP,
         SKIP_WARMUP,
@@ -415,6 +416,11 @@ class HPUGraphRunner:
         self.model_runner = model_runner
         import habana_frameworks.torch as htorch
         import vllm_hpu_extension.environment as environment
+
+        # Temporary workaround to enable G2 testing
+        # TODO: Move settings to run.sh
+        if get_device_name() == "GAUDI2":
+            hpu_utils.DECODE_BLOCK_BUCKET_MAX = 2560
 
         environment._VLLM_VALUES["model_type"] = (
             model_runner.model_config.hf_config.model_type
