@@ -27,6 +27,7 @@ from typing import List, Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 
+from sglang.srt import hpu_utils
 from sglang.srt.configs.device_config import DeviceConfig
 from sglang.srt.configs.load_config import LoadConfig
 from sglang.srt.configs.model_config import AttentionArch, ModelConfig
@@ -85,6 +86,7 @@ from sglang.srt.utils import (
     enable_show_time_cost,
     get_available_gpu_memory,
     get_bool_env_var,
+    get_device_name,
     get_scheduler_device,
     init_custom_process_group,
     is_cuda,
@@ -152,6 +154,11 @@ class ModelRunner:
         self.token_to_kv_pool_allocator = token_to_kv_pool_allocator
         self.use_mla_backend = self.model_config.attention_arch == AttentionArch.MLA
         self.attention_chunk_size = model_config.attention_chunk_size
+
+        if get_device_name() == "GAUDI3" and self.server_args.tp_size == 2:
+            hpu_utils.DECODE_BLOCK_BUCKET_MAX = 896
+            self.mem_fraction_static = 0.6586
+            self.server_args.mem_fraction_static = 0.6586
 
         # Model-specific adjustment
         self.model_specific_adjustment()
