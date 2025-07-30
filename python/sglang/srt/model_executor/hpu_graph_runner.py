@@ -92,6 +92,7 @@ HPUForwardBatchBase = namedtuple(
         "token_to_kv_pool",
         "use_contiguous_pa",
         "mm_inputs",
+        "lora_paths",
         "top_logprobs_nums",
         "token_ids_logprobs",
         "extend_prefix_lens_cpu",
@@ -171,6 +172,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         else:
             max_prefix_len = 0
             max_prompt_len = get_prefill_seq_len_bucket(sum(prompt_lens))
+
         attn_bias, q_seq_pos, q_seq_idx, kv_seq_pos, kv_seq_idx = (
             prepare_hpu_attn_bias_prefill(
                 prompt_lens=prompt_lens,
@@ -205,8 +207,13 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         extend_logprob_start_lens_hpu_padded = to_hpu_and_pad_1d(
             extend_logprob_start_lens_hpu, max_prefill_seqs - batch_size
         )
+        extend_seq_lens_padded[batch_size] = padding_len
+        lora_paths_padded = forward_batch.lora_paths
+        lora_paths_padded += [None for i in range(batch_size - len(lora_paths_padded))]
         out_cache_loc = to_hpu_and_pad_1d(forward_batch.out_cache_loc, padding_len)
-        batch_size = 1
+        batch_size = extend_seq_lens_padded.shape[
+            0
+        ]  # Align BS to align with padding done to extend_seq_lens
         block_list = (
             None
             if forward_batch.hpu_metadata is None
@@ -221,6 +228,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
             else forward_batch.hpu_metadata.use_contiguous_pa
         )
     else:
+        lora_paths_padded = forward_batch.lora_paths
         padded_batch_size = get_decode_batch_bucket(batch_size)
         padding_len = padded_batch_size - batch_size
         input_ids = to_hpu_and_pad_1d(
@@ -281,6 +289,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         token_to_kv_pool=forward_batch.token_to_kv_pool,
         use_contiguous_pa=use_contiguous_pa,
         mm_inputs=mm_inputs,
+        lora_paths=lora_paths_padded,
         return_logprob=forward_batch.return_logprob,
         top_logprobs_nums=forward_batch.top_logprobs_nums,
         token_ids_logprobs=forward_batch.token_ids_logprobs,
@@ -343,6 +352,7 @@ def create_hpu_dummy_batch_prefill(
         token_to_kv_pool=token_to_kv_pool,
         use_contiguous_pa=USE_CONTIGUOUS_PA and disable_prefix_cache,
         mm_inputs=None,
+        lora_paths=None,
     )
 
 
@@ -377,6 +387,7 @@ def create_hpu_dummy_batch_decode(
         token_to_kv_pool=token_to_kv_pool,
         use_contiguous_pa=USE_CONTIGUOUS_PA and disable_prefix_cache,
         mm_inputs=None,
+        lora_paths=None,
     )
 
 
@@ -604,6 +615,9 @@ class HPUGraphRunner:
         import habana_frameworks.torch as htorch
 
         forward_batch_hpu = create_hpu_forward_batch(forward_batch, self.model_runner)
+        # Init lora information
+        if self.model_runner.server_args.lora_paths is not None:
+            self.model_runner.lora_manager.prepare_lora_batch(forward_batch_hpu)
         results = self.model.forward(
             forward_batch_hpu.input_ids, forward_batch_hpu.positions, forward_batch_hpu
         )

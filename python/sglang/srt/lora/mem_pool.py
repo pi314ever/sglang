@@ -101,8 +101,14 @@ class LoRAMemoryPool:
             new_weight_names = lora_weight_names - buffer.keys()
             for module_name in new_weight_names:
                 lora_shape = get_lora_shape_fn(module_name, base_model, max_lora_dim)
+                # NOTE: Upstream uses torch.empty here, but we use torch.zeros
+                # to ensure that in case of multiple LoRA adapters, where
+                # adapters have different ranks, the padding for adapter with
+                # lower rank is initialized to zero. This is important when
+                # using LoRA backends that expect zero padding.
+                # DO NOT Remove this during rebases to upstream!
                 buffer[module_name] = [
-                    torch.empty(
+                    torch.zeros(
                         lora_shape,
                         dtype=self.dtype,
                         device=device,

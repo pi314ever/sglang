@@ -282,7 +282,7 @@ class LoRAUpdateTestSessionBase:
         model_path: str,
         lora_paths: list[str],
         max_loras_per_batch: int = 1,
-        lora_backend: str = "triton",
+        lora_backend: str = "torch",
         disable_cuda_graph: bool = False,
         cuda_graph_max_bs: int = 4,
     ):
@@ -543,7 +543,7 @@ def LoRAUpdateTestSession(
     model_path: str,
     lora_paths: list[str],
     max_loras_per_batch: int = 1,
-    lora_backend: str = "triton",
+    lora_backend: str = "torch",
     disable_cuda_graph: bool = False,
     cuda_graph_max_bs: int = 4,
 ):

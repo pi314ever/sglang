@@ -63,6 +63,7 @@ class BenchArgs:
     skip_warmup: bool = False
     do_not_exit: bool = False
     prompt_suffix: str = ""
+    lora_paths_request: Optional[List[Optional[str]]] = None
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser):
@@ -190,6 +191,12 @@ class BenchArgs:
             default="",
             help="Suffix applied to the end of all user prompts, followed by assistant prompt suffix.",
         )
+        parser.add_argument(
+            "--lora-paths-request",
+            nargs="+",
+            default=BenchArgs.lora_paths_request,
+            help="Lora adapters to be used per request in a batch.",
+        )
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace):
@@ -204,6 +211,7 @@ def throughput_test_once(
     ignore_eos: bool,
     extra_request_body: Dict,
     profile: bool,
+    lora_paths: Optional[list[Optional[str]]] = None,
 ):
     measurement_results = {
         "backend": backend_name,
@@ -236,7 +244,13 @@ def throughput_test_once(
         backend.start_profile(activities=["CPU", "HPU"], profile_rank_list=[0])
 
     st = time.perf_counter()
-    gen_out = backend.generate(prompt=prompt, sampling_params=sampling_params)
+    if lora_paths and lora_paths is not None:
+        lora_paths = [lp if lp != "None" else None for lp in lora_paths]
+        gen_out = backend.generate(
+            prompt=prompt, sampling_params=sampling_params, lora_path=lora_paths
+        )
+    else:
+        gen_out = backend.generate(prompt=prompt, sampling_params=sampling_params)
     latency = time.perf_counter() - st
 
     if profile:
@@ -361,6 +375,7 @@ def throughput_test(
             ignore_eos=not bench_args.disable_ignore_eos,
             extra_request_body=extra_request_body,
             profile=False,
+            lora_paths=bench_args.lora_paths_request,
         )
         time.sleep(0.5)
 
@@ -372,6 +387,7 @@ def throughput_test(
         ignore_eos=not bench_args.disable_ignore_eos,
         extra_request_body=extra_request_body,
         profile=bench_args.profile,
+        lora_paths=bench_args.lora_paths_request,
     )
     backend.shutdown()
 

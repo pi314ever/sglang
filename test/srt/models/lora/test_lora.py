@@ -88,7 +88,7 @@ class TestLoRA(CustomTestCase):
         for model_case in model_cases:
             for torch_dtype in TORCH_DTYPES:
                 max_new_tokens = 32
-                backend = "triton"
+                backend = "torch"
                 base_path = model_case.base
                 lora_adapter_paths = [a.name for a in model_case.adaptors]
                 assert len(lora_adapter_paths) >= 2

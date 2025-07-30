@@ -31,7 +31,7 @@ from transformers import (
 
 from sglang.srt.entrypoints.engine import Engine
 from sglang.srt.hf_transformers_utils import get_tokenizer
-from sglang.srt.utils import load_image
+from sglang.srt.utils import get_device, load_image
 from sglang.test.test_utils import DEFAULT_PORT_FOR_SRT_TEST_RUNNER, calculate_rouge_l
 
 DEFAULT_PROMPTS = [
@@ -67,9 +67,11 @@ NUM_TOP_LOGPROBS = 5
 
 
 def get_dtype_str(torch_dtype):
-    if torch_dtype is torch.float16:
+    if torch_dtype is torch.bfloat16:
+        return "bfloat16"
+    elif torch_dtype is torch.float16:
         return "float16"
-    if torch_dtype is torch.float32:
+    elif torch_dtype is torch.float32:
         return "float32"
     else:
         raise NotImplementedError()
@@ -226,7 +228,6 @@ class HFRunner:
     def start_model_process(self, in_queue, out_queue, model_path, torch_dtype):
         # Apply model-specific patches
         monkey_patch_gemma2_sdpa()
-
         # Load the model and tokenizer
         if self.model_type == "generation":
             config = AutoConfig.from_pretrained(model_path)

@@ -2,49 +2,20 @@ from typing import Tuple, Union
 
 import torch
 
+from sglang.srt.lora.backend.base_backend import BaseLoRABackend
 from sglang.srt.lora.utils import LoRABatchInfo
 
 
-def get_fuse_output_add_from_name(name: str) -> bool:
-    mapping = {
-        "triton": True,
-        "flashinfer": False,
-        "torch": False,
-    }
-    return mapping.get(name, False)
-
-
-def get_fuse_stacked_lora_b_from_name(name: str) -> bool:
-    mapping = {
-        "triton": True,
-        "flashinfer": False,
-        "torch": False,
-    }
-    return mapping.get(name, False)
-
-
-class BaseLoRABackend:
-    """Base class for different Lora backends.
-       Each backend has its own implementation of Lora kernels.
-
-    Args:
-        name: name of backend
-        batch_info: information of current batch for use
-        fuse_output_add: if set to True, the output buffer for storing result will be passed in when doing lora_b forward,
-                                 and the operation of adding will be fused into kernel
-    """
-
+class TorchLoRABackend(BaseLoRABackend):
     def __init__(self, name: str, batch_info: LoRABatchInfo = None):
-        self.name = name
-        self.batch_info = batch_info
-        self.fuse_output_add = get_fuse_output_add_from_name(name)
-        self.fuse_stacked_lora_b = get_fuse_stacked_lora_b_from_name(name)
+        super().__init__(name, batch_info)
+        self.exploded_indices = None
+        self.scalings = None
 
     def run_lora_a_sgemm(
         self, x: torch.Tensor, weights: torch.Tensor, *args, **kwargs
     ) -> torch.Tensor:
         """Run segment Gemm of lora a modules with current backend.
-        The definition of segment Gemm can be referred to https://docs.flashinfer.ai/api/gemm.html.
 
         Args:
              x: input matrix with shape (s, input_dim), here s is the sum of all sequence lengths
@@ -54,13 +25,14 @@ class BaseLoRABackend:
         Returns:
              result with shape (s, c * r)
         """
-        pass
+        selected_loras = torch.index_select(weights, 0, self.exploded_indices)
+        outputs = x.unsqueeze(-2) @ selected_loras.transpose(-1, -2)
+        return outputs.reshape(-1, outputs.shape[-1])
 
     def run_lora_b_sgemm(
         self, x: torch.Tensor, weights: torch.Tensor, *args, **kwargs
     ) -> torch.Tensor:
         """Run segment Gemm of lora b modules with current backend.
-        The definition of segment Gemm can be referred to https://docs.flashinfer.ai/api/gemm.html.
 
         Args:
              x: input matrix with shape (s, r), here s is the sum of all sequence lengths, r is lora rank
@@ -69,7 +41,9 @@ class BaseLoRABackend:
         Returns:
              result with shape (s, output_dim)
         """
-        pass
+        selected_loras = torch.index_select(weights, 0, self.exploded_indices)
+        outputs = x.unsqueeze(-2) @ selected_loras.transpose(-1, -2)
+        return outputs.reshape(-1, outputs.shape[-1]) * self.scalings.to(outputs.dtype)
 
     def run_qkv_lora(
         self,
@@ -92,7 +66,42 @@ class BaseLoRABackend:
         Returns:
             result with shape (s, output_dim_q + 2 * output_dim_kv)
         """
-        pass
+        assert isinstance(qkv_lora_b, tuple) and len(qkv_lora_b) == 2
+
+        # Shape of lora_a_output: (s, 3 * r)
+        lora_a_output = self.run_lora_a_sgemm(x=x, weights=qkv_lora_a)
+
+        q_lora_b, kv_lora_b = qkv_lora_b
+        lora_rank = kv_lora_b.shape[-1]
+        output_dim_q = q_lora_b.shape[-2]
+        output_dim_kv = kv_lora_b.shape[-2]
+        lora_output = torch.empty(
+            (x.shape[0], output_dim_q + 2 * output_dim_kv),
+            device=x.device,
+            dtype=x.dtype,
+        )
+
+        # q
+        lora_output[:, :output_dim_q] = self.run_lora_b_sgemm(
+            x=lora_a_output[:, :lora_rank].contiguous(), weights=q_lora_b[0]
+        )
+
+        # kv
+        lora_output[:, output_dim_q : output_dim_q + output_dim_kv] = (
+            self.run_lora_b_sgemm(
+                x=lora_a_output[:, lora_rank : 2 * lora_rank].contiguous(),
+                weights=kv_lora_b[0],
+            )
+        )
+
+        lora_output[
+            :, output_dim_q + output_dim_kv : output_dim_q + 2 * output_dim_kv
+        ] = self.run_lora_b_sgemm(
+            x=lora_a_output[:, 2 * lora_rank : 3 * lora_rank].contiguous(),
+            weights=kv_lora_b[1],
+        )
+
+        return lora_output
 
     def run_gate_up_lora(
         self,
@@ -113,27 +122,37 @@ class BaseLoRABackend:
         Returns:
             result with shape (s, 2 * output_dim)
         """
-        pass
+        assert isinstance(gate_up_lora_b, tuple) and len(gate_up_lora_b) == 2
+        lora_rank = gate_up_lora_b[0].shape[-1]
+        output_dim = gate_up_lora_b[0].shape[-2]
+
+        # Shape of lora_a_output: (s, 2 * r)
+        lora_a_output = self.run_lora_a_sgemm(x=x, weights=gate_up_lora_a)
+
+        lora_output = torch.empty(
+            (x.shape[0], 2 * output_dim),
+            device=x.device,
+            dtype=x.dtype,
+        )
+
+        # Compute lora for gate and up proj respectively
+        lora_output[:, :output_dim] = self.run_lora_b_sgemm(
+            x=lora_a_output[:, :lora_rank].contiguous(),
+            weights=gate_up_lora_b[0],
+        )
+
+        lora_output[:, output_dim:] = self.run_lora_b_sgemm(
+            x=lora_a_output[:, lora_rank:].contiguous(),
+            weights=gate_up_lora_b[1],
+        )
+
+        return lora_output
 
     def set_batch_info(self, batch_info: LoRABatchInfo):
         self.batch_info = batch_info
-
-
-def get_backend_from_name(name: str) -> BaseLoRABackend:
-    """
-    Get corresponding backend class from backend's name
-    """
-    if name == "triton":
-        from sglang.srt.lora.backend.triton_backend import TritonLoRABackend
-
-        return TritonLoRABackend
-    elif name == "flashinfer":
-        from sglang.srt.lora.backend.flashinfer_backend import FlashInferLoRABackend
-
-        return FlashInferLoRABackend
-    elif name == "torch":
-        from sglang.srt.lora.backend.torch_backend import TorchLoRABackend
-
-        return TorchLoRABackend
-    else:
-        raise ValueError(f"Invalid backend: {name}")
+        self.exploded_indices = torch.repeat_interleave(
+            self.batch_info.weight_indices, self.batch_info.seg_lens.to(torch.int32)
+        )
+        self.scalings = torch.gather(
+            self.batch_info.scalings, 0, self.exploded_indices
+        ).unsqueeze(-1)
