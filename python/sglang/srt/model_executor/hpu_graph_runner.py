@@ -185,37 +185,37 @@ def maybe_to_hpu(input):
 
 def create_hpu_mm_inputs(forward_batch: ForwardBatch) -> HPUMultimodalInputs:
     mm_inputs = forward_batch.merge_mm_inputs()
-    assert mm_inputs is not None, "Expected multimodal inputs"
-    assert len(mm_inputs.mm_items) == 1, "Expected merged multimodal items"
-    data_item = mm_inputs.mm_items[0]
-    mm_items = [
-        HPUMultimodalDataItem(
-            modality=data_item.modality,
-            hash=data_item.hash,
-            pad_value=data_item.pad_value,
-            aspect_ratio_id=maybe_to_hpu(data_item.aspect_ratio_id),
-            aspect_ratio_mask=maybe_to_hpu(data_item.aspect_ratio_mask),
-            image_sizes=data_item.image_sizes,
-            image_offsets=data_item.image_offsets,
-            pixel_values=maybe_to_hpu(data_item.pixel_values),
-            image_grid_thws=maybe_to_hpu(data_item.image_grid_thws),
-            video_grid_thws=maybe_to_hpu(data_item.video_grid_thws),
-            image_emb_mask=maybe_to_hpu(data_item.image_emb_mask),
-            image_spatial_crop=maybe_to_hpu(data_item.image_spatial_crop),
-            second_per_grid_ts=(
-                list(maybe_to_hpu(item) for item in data_item.second_per_grid_ts)
-                if data_item.second_per_grid_ts is not None
-                else None
-            ),
-            tgt_size=data_item.tgt_size,
-            audio_features=maybe_to_hpu(data_item.audio_features),
-            audio_feature_lens=(
-                list(maybe_to_hpu(item) for item in data_item.audio_feature_lens)
-                if data_item.audio_feature_lens is not None
-                else None
-            ),
+    mm_items = []
+
+    for data_item in mm_inputs.mm_items:
+        mm_items.append(
+            HPUMultimodalDataItem(
+                modality=data_item.modality,
+                hash=data_item.hash,
+                pad_value=data_item.pad_value,
+                aspect_ratio_id=maybe_to_hpu(data_item.aspect_ratio_id),
+                aspect_ratio_mask=maybe_to_hpu(data_item.aspect_ratio_mask),
+                image_sizes=data_item.image_sizes,
+                image_offsets=data_item.image_offsets,
+                pixel_values=maybe_to_hpu(data_item.pixel_values),
+                image_grid_thws=maybe_to_hpu(data_item.image_grid_thws),
+                video_grid_thws=maybe_to_hpu(data_item.video_grid_thws),
+                image_emb_mask=maybe_to_hpu(data_item.image_emb_mask),
+                image_spatial_crop=maybe_to_hpu(data_item.image_spatial_crop),
+                second_per_grid_ts=(
+                    list(maybe_to_hpu(item) for item in data_item.second_per_grid_ts)
+                    if data_item.second_per_grid_ts is not None
+                    else None
+                ),
+                tgt_size=data_item.tgt_size,
+                audio_features=maybe_to_hpu(data_item.audio_features),
+                audio_feature_lens=(
+                    list(maybe_to_hpu(item) for item in data_item.audio_feature_lens)
+                    if data_item.audio_feature_lens is not None
+                    else None
+                ),
+            )
         )
-    ]
 
     return HPUMultimodalInputs(
         mm_items=mm_items,
