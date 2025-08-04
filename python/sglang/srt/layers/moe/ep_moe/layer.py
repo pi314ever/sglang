@@ -249,6 +249,39 @@ class EPMoE(torch.nn.Module):
             self.fp8_dtype = torch.float8_e4m3fn
             self.activation_scheme = quant_config.activation_scheme
 
+        if _is_hpu:
+            from vllm_hpu_extension.ops import (
+                VllmMixtureOfExpertsOp,
+                VllmMixtureOfExpertsOpFP8,
+                VllmMixtureOfExpertsOpFP8PerChannel,
+            )
+
+            num_experts = self.num_experts_per_partition
+            experts_min, experts_max = self.start_expert_id, self.end_expert_id
+            if quant_config is None or isinstance(
+                self.quant_method, UnquantizedEPMoEMethod
+            ):
+                moe_op = VllmMixtureOfExpertsOp(
+                    num_experts,
+                    experts_min,
+                    experts_max,
+                )
+            elif quant_config is not None:
+                if hasattr(quant_config, "weight_block_size"):
+                    moe_op = VllmMixtureOfExpertsOpFP8(
+                        num_experts,
+                        experts_min,
+                        experts_max,
+                    )
+                else:
+                    # TODO(qun) in the future, we may need this for perf
+                    moe_op = VllmMixtureOfExpertsOpFP8PerChannel(
+                        num_experts,
+                        experts_min,
+                        experts_max,
+                    )
+            self.moe_op = moe_op
+
         self.quant_method.create_weights(
             layer=self,
             num_experts_per_partition=self.num_experts_per_partition,
@@ -273,7 +306,44 @@ class EPMoE(torch.nn.Module):
             self.w2_weight_scale_inv if self.use_block_quant else self.w2_weight_scale,
         )
 
+    def forward_hpu(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
+        assert self.quant_method is not None
+        import habana_frameworks.torch as htorch
+
+        topk_weights, topk_ids = select_experts(
+            hidden_states=hidden_states,
+            router_logits=router_logits,
+            top_k=self.top_k,
+            use_grouped_topk=self.use_grouped_topk,
+            renormalize=self.renormalize,
+            topk_group=self.topk_group,
+            num_expert_group=self.num_expert_group,
+            correction_bias=self.correction_bias,
+            custom_routing_function=self.custom_routing_function,
+            routed_scaling_factor=self.routed_scaling_factor,
+            torch_native=True,
+        )
+
+        topk_weights = topk_weights.view(-1, self.top_k)
+        topk_ids = topk_ids.view(-1, self.top_k)
+
+        hidden_dim = hidden_states.shape[-1]
+        x = hidden_states.view(-1, hidden_dim)
+
+        output = self.moe_op(
+            x,
+            topk_ids.to(torch.int64),
+            topk_weights.to(x.dtype),
+            permuted_weights=True,
+            activation="silu",
+        )
+
+        return output.view(-1, x.shape[1])
+
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
+        if _is_hpu:
+            return self.forward_hpu(hidden_states, router_logits)
+
         if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM and self.use_fp8_w8a8:
             return self.forward_deepgemm(hidden_states, router_logits)
         else:
@@ -879,6 +949,8 @@ class Fp8EPMoEMethod(Fp8MoEMethod):
         params_dtype: torch.dtype,
         **extra_weight_attrs,
     ):
+        layer.quant_config = self.quant_config
+
         if self.quant_config.is_checkpoint_fp8_serialized:
             params_dtype = torch.float8_e4m3fn
 
@@ -1051,6 +1123,13 @@ class Fp8EPMoEMethod(Fp8MoEMethod):
                     requires_grad=False,
                 )
             if self.block_quant:
+                if _is_hpu:
+                    import vllm_hpu_extension.ops as hpu_ops
+
+                    # TODO(qun): enable force_channel_fp8
+                    layer = hpu_ops.fp8_block_moe_prepare_weights(layer, False)
+                    return
+
                 # If ROCm, normalize the weights and scales to e4m3fnuz
                 if _is_fp8_fnuz:
                     # activation_scheme: dynamic
