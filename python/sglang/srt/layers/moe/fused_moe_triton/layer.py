@@ -603,7 +603,12 @@ class FusedMoE(torch.nn.Module):
             intermediate_size=self.intermediate_size_per_partition,
             intermediate_size_per_partition=self.intermediate_size_per_partition,
             params_dtype=params_dtype,
-            weight_loader=self.weight_loader,
+            weight_loader=(
+                self.weight_loader
+                if not use_weight_loader_fused
+                else self.weight_loader_fused
+            ),
+            with_bias=with_bias,
         )
 
     def _load_per_tensor_weight_scale(
@@ -631,6 +636,7 @@ class FusedMoE(torch.nn.Module):
         shard_id: str,
         loaded_weight: torch.tensor,
         tp_rank: int,
+        is_bias: bool = False,
     ):
         # Load grouped weight scales for group quantization
         # or model weights
@@ -641,14 +647,16 @@ class FusedMoE(torch.nn.Module):
                 loaded_weight=loaded_weight,
                 expert_data=expert_data,
                 tp_rank=tp_rank,
+                is_bias=is_bias,
             )
-        elif shard_id in ("w1", "w3"):
+        elif shard_id in ("w1", "w3", "w13"):
             self._load_w13(
                 shard_id=shard_id,
                 shard_dim=shard_dim,
                 loaded_weight=loaded_weight,
                 expert_data=expert_data,
                 tp_rank=tp_rank,
+                is_bias=is_bias,
             )
 
     def _load_per_channel_weight_scale(
@@ -678,17 +686,30 @@ class FusedMoE(torch.nn.Module):
         shard_id: str,
         loaded_weight: torch.tensor,
         tp_rank: int,
+        is_bias: bool = False,
     ):
 
         # Index the loaded weight for tp sharding.
         # gate_up_proj: "MergedColumnParallel", so tp sharding on output_dim
-        shard_size = expert_data.shape[shard_dim] // 2
+        assert shard_id in {"w1", "w3", "w13"}
+
+        if is_bias:
+            # if this weight is a bias, the last dimension must be the sharded dimension
+            shard_dim = -1
+
+        if shard_id in {"w1", "w3"}:
+            # non-fused version
+            shard_size = expert_data.shape[shard_dim] // 2
+        elif shard_id in {"w13"}:
+            # fused version
+            shard_size = expert_data.shape[shard_dim]
+        else:
+            raise NotImplementedError
 
         # Narrow parameter and load.
         # w1, gate_proj: Load into first logical weight of w13.
         # w3, up_proj: Load into second logical weight of w13.
         # trtllm cutlass kernel assumes differently
-        assert shard_id in ("w1", "w3")
         switch_w13 = getattr(self.quant_method, "load_up_proj_weight_first", False)
         if (switch_w13 and shard_id == "w1") or (not switch_w13 and shard_id == "w3"):
             start = shard_size
@@ -721,12 +742,20 @@ class FusedMoE(torch.nn.Module):
         shard_id: str,
         loaded_weight: torch.tensor,
         tp_rank: int,
+        is_bias: bool = False,
     ):
 
         # Index the loaded weight for tp sharding.
         # down_proj: "RowParallel" so tp sharding on input_dim
         # Narrow parameter and load.
-        shard_size = expert_data.shape[shard_dim]
+        if is_bias:
+            # this expert_data is a bias, not weight,
+            # for w2_bias in TP, it does not need to be sharded
+            shard_size = expert_data.shape[-1]
+        else:
+            # this parameter is a weight matrix
+            # for w2 in TP, it shards the input_features, i.e., shard_dim=2
+            shard_size = expert_data.shape[shard_dim]
 
         if _is_cpu:
             expert_data, loaded_weight = narrow_padded_param_and_loaded_weight(
