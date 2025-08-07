@@ -499,6 +499,9 @@ class ModelRunner:
     def init_torch_distributed(self):
         logger.info("Init torch distributed begin.")
 
+        # hl_logger needs ID to create per device log folder
+        os.environ["ID"] = str(self.gpu_id)
+
         try:
             torch.get_device_module(self.device).set_device(self.gpu_id)
         except Exception:
