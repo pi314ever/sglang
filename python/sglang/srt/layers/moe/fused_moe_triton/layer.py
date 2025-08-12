@@ -549,6 +549,7 @@ class FusedMoE(torch.nn.Module):
         self.use_presharded_weights = use_presharded_weights
         self.inplace = inplace
         self.no_combine = no_combine
+        self.hpu_force_channel_fp8 = get_bool_env_var("SGLANG_HPU_FORCE_CHANNEL_FP8")
 
         if quant_config is None:
             self.quant_method: Optional[QuantizeMethodBase] = (
@@ -580,14 +581,16 @@ class FusedMoE(torch.nn.Module):
                     experts_max,
                 )
             elif quant_config is not None:
-                if hasattr(quant_config, "weight_block_size"):
+                if (
+                    hasattr(quant_config, "weight_block_size")
+                    and not self.hpu_force_channel_fp8
+                ):
                     moe_op = VllmMixtureOfExpertsOpFP8(
                         num_experts,
                         experts_min,
                         experts_max,
                     )
                 else:
-                    # TODO(qun) in the future, we may need this for perf
                     moe_op = VllmMixtureOfExpertsOpFP8PerChannel(
                         num_experts,
                         experts_min,

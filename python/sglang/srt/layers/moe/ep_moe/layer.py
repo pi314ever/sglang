@@ -228,6 +228,7 @@ class EPMoE(torch.nn.Module):
         self.activation = activation
         self.routed_scaling_factor = routed_scaling_factor
         self.use_per_token_if_dynamic = use_per_token_if_dynamic
+        self.hpu_force_channel_fp8 = get_bool_env_var("SGLANG_HPU_FORCE_CHANNEL_FP8")
 
         if quant_config is None:
             self.quant_method: Optional[QuantizeMethodBase] = UnquantizedEPMoEMethod()
@@ -267,14 +268,16 @@ class EPMoE(torch.nn.Module):
                     experts_max,
                 )
             elif quant_config is not None:
-                if hasattr(quant_config, "weight_block_size"):
+                if (
+                    hasattr(quant_config, "weight_block_size")
+                    and not self.hpu_force_channel_fp8
+                ):
                     moe_op = VllmMixtureOfExpertsOpFP8(
                         num_experts,
                         experts_min,
                         experts_max,
                     )
                 else:
-                    # TODO(qun) in the future, we may need this for perf
                     moe_op = VllmMixtureOfExpertsOpFP8PerChannel(
                         num_experts,
                         experts_min,
@@ -939,6 +942,7 @@ class Fp8EPMoEMethod(Fp8MoEMethod):
     def __init__(self, quant_config: Fp8Config):
         self.quant_config = quant_config
         self.block_quant = self.quant_config.weight_block_size is not None
+        self.hpu_force_channel_fp8 = get_bool_env_var("SGLANG_HPU_FORCE_CHANNEL_FP8")
 
     def create_weights(
         self,
@@ -1126,8 +1130,9 @@ class Fp8EPMoEMethod(Fp8MoEMethod):
                 if _is_hpu:
                     import vllm_hpu_extension.ops as hpu_ops
 
-                    # TODO(qun): enable force_channel_fp8
-                    layer = hpu_ops.fp8_block_moe_prepare_weights(layer, False)
+                    layer = hpu_ops.fp8_block_moe_prepare_weights(
+                        layer, self.hpu_force_channel_fp8
+                    )
                     return
 
                 # If ROCm, normalize the weights and scales to e4m3fnuz

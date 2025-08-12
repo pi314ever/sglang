@@ -215,6 +215,9 @@ class Fp8LinearMethod(LinearMethodBase):
         self.use_marlin = (
             get_bool_env_var("SGLANG_FORCE_FP8_MARLIN") and MARLIN_FP8_AVAILABLE
         )
+
+        self.hpu_force_channel_fp8 = get_bool_env_var("SGLANG_HPU_FORCE_CHANNEL_FP8")
+
         # Disable marlin for ROCm
         if _is_hip:
             self.use_marlin = False
@@ -330,9 +333,9 @@ class Fp8LinearMethod(LinearMethodBase):
         # Block quant doesn't need to process weights after loading
         if self.block_quant:
             if _is_hpu:
-                # TODO(qun) may need force channel fp8 in future for perf
-                # optimization.
-                layer = hpu_ops.fp8_block_linear_postprocess_weights(layer, False)
+                layer = hpu_ops.fp8_block_linear_postprocess_weights(
+                    layer, self.hpu_force_channel_fp8
+                )
                 return
 
             # If ROCm, normalize the weights and scales to e4m3fnuz
@@ -454,7 +457,7 @@ class Fp8LinearMethod(LinearMethodBase):
                     block_size=self.quant_config.weight_block_size,
                     bias=bias,
                     do_unpad=True,
-                    force_channel_fp8=False,
+                    force_channel_fp8=self.hpu_force_channel_fp8,
                 )
 
             if use_intel_amx_backend(layer):
@@ -523,6 +526,7 @@ class Fp8MoEMethod:
         self.quant_config = quant_config
         self.block_quant = self.quant_config.weight_block_size is not None
         self.cutlass_fp8_supported = cutlass_fp8_supported()
+        self.hpu_force_channel_fp8 = get_bool_env_var("SGLANG_HPU_FORCE_CHANNEL_FP8")
 
     def create_weights(
         self,
@@ -760,7 +764,9 @@ class Fp8MoEMethod:
             if _is_hpu:
                 import vllm_hpu_extension.ops as hpu_ops
 
-                layer = hpu_ops.fp8_block_moe_prepare_weights(layer, False)
+                layer = hpu_ops.fp8_block_moe_prepare_weights(
+                    layer, self.hpu_force_channel_fp8
+                )
                 return
 
             # If ROCm, normalize the weights and scales to e4m3fnuz

@@ -232,6 +232,9 @@ class ServerArgs:
     disable_fast_image_processor: bool = False
     mm_attention_backend: Optional[str] = None
 
+    # HPU-specific optimization/debug options
+    hpu_force_channel_fp8: bool = False
+
     # Debug tensor dumps
     debug_tensor_dump_output_folder: Optional[str] = None
     debug_tensor_dump_input_file: Optional[str] = None
@@ -597,6 +600,14 @@ class ServerArgs:
                 )
         else:
             self.max_prefill_tokens = 16384
+
+        if get_bool_env_var("SGLANG_HPU_FORCE_CHANNEL_FP8"):
+            self.hpu_force_channel_fp8 = True
+            logger.warning("Enabled HPU force channel fp8 from env variable")
+        else:
+            os.environ["SGLANG_HPU_FORCE_CHANNEL_FP8"] = (
+                "1" if self.hpu_force_channel_fp8 else "0"
+            )
 
     def validate_disagg_tp_size(self, prefill_tp: int, decode_tp: int):
         larger_tp = max(decode_tp, prefill_tp)
@@ -1618,6 +1629,13 @@ class ServerArgs:
             required=False,
             help="Specify custom warmup functions (csv) to run before server starts eg. --warmups=warmup_name1,warmup_name2 "
             "will run the functions `warmup_name1` and `warmup_name2` specified in warmup.py before the server starts listening for requests",
+        )
+
+        # HPU-specific optimization/debug options
+        parser.add_argument(
+            "--hpu-force-channel-fp8",
+            action="store_true",
+            help="Force converting block-wise fp8 weights to channel-wise fp8 weights for HPU.",
         )
 
         # Debug tensor dumps
