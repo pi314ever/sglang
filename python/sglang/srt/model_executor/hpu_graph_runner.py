@@ -16,21 +16,21 @@
 from __future__ import annotations
 
 import logging
-import math
 import os
 import time
 from collections import namedtuple
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
-import tqdm
 
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.layers.pooler import EmbeddingPoolerOutput
 from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
 from sglang.srt.managers.mm_utils import MultimodalInputs
+from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
 from sglang.srt.model_executor.forward_batch_info import (
     CaptureHiddenMode,
     ForwardBatch,
@@ -40,7 +40,6 @@ from sglang.srt.utils import get_device_name, is_hpu
 
 _is_hpu = is_hpu()
 if _is_hpu:
-
     os.environ["PT_HPU_ENABLE_LAZY_COLLECTIVES"] = "true"
 
     # Temporarily disabled due to accuracy issue in feature
@@ -135,16 +134,21 @@ HPUForwardBatchBase = namedtuple(
 HPUMultimodalInputs = namedtuple(
     "HPUMultimodalInputs",
     [field.name for field in MultimodalInputs.__dataclass_fields__.values()],
+    defaults=[None] * (len(MultimodalInputs.__dataclass_fields__.values()) - 1),
+)
+
+HPUMultimodalDataItemBase = namedtuple(
+    "HPUMultimodalDataItem",
+    [field.name for field in MultimodalDataItem.__dataclass_fields__.values()],
 )
 
 
 class HPUForwardBatch(HPUForwardBatchBase):
-
     def contains_mm_inputs(self):
         return self.mm_inputs is not None
 
     def merge_mm_inputs(self):
-        return self.mm_inputs
+        return self.mm_inputs[0]
 
 
 def set_hpu_torch_compile_config():
@@ -153,6 +157,93 @@ def set_hpu_torch_compile_config():
     torch._dynamo.config.accumulated_cache_size_limit = 8192
     if hasattr(torch._dynamo.config, "cache_size_limit"):
         torch._dynamo.config.cache_size_limit = 8192
+
+
+class HPUMultimodalDataItem(HPUMultimodalDataItemBase):
+    def is_audio(self):
+        return (
+            self.modality == Modality.AUDIO
+        ) and not MultimodalDataItem.is_empty_list(self.audio_features)
+
+    def is_image(self):
+        return (
+            self.modality == Modality.IMAGE or self.modality == Modality.MULTI_IMAGES
+        ) and not MultimodalDataItem.is_empty_list(self.pixel_values)
+
+    def is_video(self):
+        return (
+            self.modality == Modality.VIDEO
+        ) and not MultimodalDataItem.is_empty_list(self.pixel_values)
+
+    def is_valid(self) -> bool:
+        return self.is_image() or self.is_video() or self.is_audio()
+
+
+def maybe_to_hpu(input):
+    if isinstance(input, torch.Tensor):
+        return input.to("hpu")
+    elif isinstance(input, np.ndarray):
+        return torch.tensor(input).to("hpu")
+    return input
+
+
+def create_hpu_mm_inputs(forward_batch: ForwardBatch) -> HPUMultimodalInputs:
+    mm_inputs = forward_batch.merge_mm_inputs()
+    mm_items = []
+
+    for data_item in mm_inputs.mm_items:
+        mm_items.append(
+            HPUMultimodalDataItem(
+                modality=data_item.modality,
+                hash=data_item.hash,
+                pad_value=data_item.pad_value,
+                image_sizes=data_item.image_sizes,
+                image_offsets=data_item.image_offsets,
+                pixel_values=maybe_to_hpu(data_item.pixel_values),
+                audio_features=maybe_to_hpu(data_item.audio_features),
+                audio_feature_lens=(
+                    list(maybe_to_hpu(item) for item in data_item.audio_feature_lens)
+                    if data_item.audio_feature_lens is not None
+                    else None
+                ),
+                audio_offsets=maybe_to_hpu(data_item.audio_offsets),
+                precomputed_features=maybe_to_hpu(data_item.precomputed_features),
+                image_grid_thw=maybe_to_hpu(data_item.image_grid_thw),
+                second_per_grid_ts=(
+                    list(maybe_to_hpu(item) for item in data_item.second_per_grid_ts)
+                    if data_item.second_per_grid_ts is not None
+                    else None
+                ),
+                image_emb_mask=maybe_to_hpu(data_item.image_emb_mask),
+                image_spatial_crop=maybe_to_hpu(data_item.image_spatial_crop),
+                tgt_size=data_item.tgt_size,
+                aspect_ratio_id=maybe_to_hpu(data_item.aspect_ratio_id),
+                aspect_ratio_mask=maybe_to_hpu(data_item.aspect_ratio_mask),
+                image_grid_hws=(
+                    list(maybe_to_hpu(item) for item in data_item.image_grid_hws)
+                    if data_item.image_grid_hws is not None
+                    else None
+                ),
+                input_features=maybe_to_hpu(data_item.input_features),
+                input_features_mask=maybe_to_hpu(data_item.input_features_mask),
+            )
+        )
+
+    return HPUMultimodalInputs(
+        mm_items=mm_items,
+        image_pad_len=mm_inputs.image_pad_len,
+        num_image_tokens=mm_inputs.num_image_tokens,
+        mrope_positions=maybe_to_hpu(mm_inputs.mrope_positions),
+        mrope_position_delta=maybe_to_hpu(mm_inputs.mrope_position_delta),
+        im_token_id=mm_inputs.im_token_id,
+        im_start_id=mm_inputs.im_start_id,
+        im_end_id=mm_inputs.im_end_id,
+        slice_start_id=mm_inputs.slice_start_id,
+        slice_end_id=mm_inputs.slice_end_id,
+        video_token_id=mm_inputs.video_token_id,
+        audio_start_id=maybe_to_hpu(mm_inputs.audio_start_id),
+        audio_end_id=maybe_to_hpu(mm_inputs.audio_end_id),
+    )
 
 
 def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRunner):
@@ -255,15 +346,15 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         block_usage = forward_batch.hpu_metadata.block_usage.to("hpu")
         use_contiguous_pa = forward_batch.hpu_metadata.use_contiguous_pa
 
+        extend_prefix_lens_hpu_padded = None
         extend_seq_lens_hpu_padded = None
         extend_logprob_start_lens_hpu_padded = None
 
     if forward_batch.contains_mm_inputs():
         if forward_batch.contains_audio_inputs():
-            raise NotImplementedError(f"Audio inputs are not supported yet")
+            raise NotImplementedError("Audio inputs are not supported yet")
+        mm_inputs = [create_hpu_mm_inputs(forward_batch)]
 
-        mm_inputs = forward_batch.merge_mm_inputs()
-        mm_inputs = HPUMultimodalInputs(**mm_inputs.__dict__)
     else:
         mm_inputs = None
 
@@ -392,7 +483,6 @@ def create_hpu_dummy_batch_decode(
 
 
 class HPUAdapter:
-
     def __init__(self, model, dtype) -> None:
         self.model = model
         self.dtype = dtype
@@ -440,10 +530,24 @@ class HPUGraphRunner:
                 hidden_layer_markstep_interval,
             )
 
-            self.model = htorch.hpu.wrap_in_hpu_graph(
-                HPUAdapter(self.model_runner.model, self.model_runner.dtype),
-                disable_tensor_cache=True,
-            )
+            self.model = HPUAdapter(self.model_runner.model, self.model_runner.dtype)
+            if not self.model_runner.server_args.disable_cuda_graph:
+                if self.model_runner.is_multimodal:
+                    logger.warn(
+                        "Multimodal model cannot wrap in HPU graphs completely. Attempting to wrap vision and language model in HPU graph, with lazy mode fallback."
+                    )
+                    if hasattr(self.model.model, "vision_model"):
+                        self.model.model.vision_model = htorch.hpu.wrap_in_hpu_graph(
+                            self.model.model.vision_model, disable_tensor_cache=True
+                        )
+                    if hasattr(self.model.model, "language_model"):
+                        self.model.model.language_model = htorch.hpu.wrap_in_hpu_graph(
+                            self.model.model.language_model, disable_tensor_cache=True
+                        )
+                else:
+                    self.model = htorch.hpu.wrap_in_hpu_graph(
+                        self.model, disable_tensor_cache=True
+                    )
         elif self.model_runner.server_args.enable_torch_compile:
             set_hpu_torch_compile_config()
             self.regional_compilation_layers_list = [RMSNorm, VocabParallelEmbedding]

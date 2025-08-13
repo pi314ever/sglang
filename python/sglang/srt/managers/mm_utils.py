@@ -19,13 +19,15 @@ from sglang.srt.managers.schedule_batch import (
 )
 from sglang.srt.mem_cache.multimodal_cache import MultiModalCache
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.utils import flatten_nested_list, print_warning_once
+from sglang.srt.utils import flatten_nested_list, is_hpu, print_warning_once
 from sglang.utils import logger
 
 # NOTE: Using the shared logger from sglang.utils instead of creating a module-specific logger
 # to ensure consistent logging behavior across the codebase. This prevents issues with log
 # propagation that can cause some log messages (like 'server is fired up') to not appear
 # in the console when multimodal support is enabled.
+
+_is_hpu = is_hpu()
 
 
 class MultiModalityDataPaddingPattern:
@@ -556,13 +558,17 @@ def general_mm_embed_routine(
         ]
         extend_prefix_lens = [
             prefix_len
-            for i, prefix_len in enumerate(forward_batch.extend_prefix_lens_cpu)
-            if forward_batch.mm_inputs[i] is not None
+            for mm_input, prefix_len in zip(
+                forward_batch.mm_inputs, forward_batch.extend_prefix_lens_cpu
+            )
+            if mm_input is not None
         ]
         extend_seq_lens = [
             seq_len
-            for i, seq_len in enumerate(forward_batch.extend_seq_lens_cpu)
-            if forward_batch.mm_inputs[i] is not None
+            for mm_input, seq_len in zip(
+                forward_batch.mm_inputs, forward_batch.extend_seq_lens_cpu
+            )
+            if mm_input is not None
         ]
         inputs_embeds = embed_mm_inputs(
             mm_inputs_list=mm_inputs_list,
@@ -576,7 +582,11 @@ def general_mm_embed_routine(
         )
         # once used, mm_inputs is useless, considering chunked-prefill is disabled for multimodal models
         # just being defensive here
-        forward_batch.mm_inputs = None
+        if _is_hpu:
+            # NOTE: HPU uses namedtuples, which need to _replace instead of assigning.
+            forward_batch = forward_batch._replace(mm_inputs=None)
+        else:
+            forward_batch.mm_inputs = None
     else:
         inputs_embeds = embed_tokens(input_ids)
 
