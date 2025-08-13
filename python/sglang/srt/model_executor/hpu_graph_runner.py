@@ -273,7 +273,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
                 dtype=model_runner.dtype,
             )
         )
-        attn_bias = None
+        attn_bias = attn_bias.to("hpu")
         q_seq_pos = q_seq_pos.to("hpu")
         q_seq_idx = q_seq_idx.to("hpu")
         kv_seq_pos = kv_seq_pos.to("hpu")
@@ -418,7 +418,7 @@ def create_hpu_dummy_batch_prefill(
         input_ids=torch.zeros(prompt_len, dtype=torch.int64, device="hpu"),
         out_cache_loc=torch.arange(prompt_len, dtype=torch.int64, device="hpu"),
         positions=torch.zeros(prompt_len, dtype=torch.int64, device="hpu"),
-        attn_bias=None,
+        attn_bias=torch.zeros(1, 1, prompt_len, seq_len, dtype=dtype, device="hpu"),
         q_seq_pos=torch.zeros(1, prompt_len, dtype=torch.int64, device="hpu"),
         q_seq_idx=torch.zeros(1, prompt_len, dtype=torch.int64, device="hpu"),
         kv_seq_pos=torch.zeros(1, seq_len, dtype=torch.int64, device="hpu"),
@@ -492,6 +492,17 @@ class HPUAdapter:
 
     def forward(self, *args, **kwargs):
         assert len(args) == 3, "Only three arguments are supported"
+        input_batch = args[2]
+        if input_batch.forward_mode.is_extend():
+            input_batch.attn_bias.copy_(
+                compute_hpu_attn_bias_prefill(
+                    input_batch.q_seq_pos,
+                    input_batch.q_seq_idx,
+                    input_batch.kv_seq_pos,
+                    input_batch.kv_seq_idx,
+                    self.dtype,
+                )
+            )
         return self.model(*args, **kwargs)
 
     def __call__(self, *args, **kwargs):
