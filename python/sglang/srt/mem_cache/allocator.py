@@ -638,8 +638,10 @@ def alloc_extend_kernel_python(
         remain_len = extend_len
         if (last_loc + 1) % page_size != 0:
             next_page_start = (last_loc // page_size + 1) * page_size
-            out_indices_list.extend(range(last_loc + 1, next_page_start))
-            remain_len -= next_page_start - last_loc
+            start = last_loc + 1
+            end = min(next_page_start, start + remain_len)
+            out_indices_list.extend(range(start, end))
+            remain_len -= end - start
 
         while remain_len >= page_size:
             if not free_pages:
