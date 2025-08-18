@@ -52,7 +52,7 @@ from sglang.srt.model_loader.weight_utils import (
     kv_cache_scales_loader,
     maybe_remap_kv_scale_name,
 )
-from sglang.srt.utils import add_prefix, make_layers
+from sglang.srt.utils import add_prefix, get_device_name, make_layers
 from sglang.utils import get_exception_traceback
 
 logger = logging.getLogger(__name__)
@@ -594,6 +594,13 @@ class LlamaForCausalLM(nn.Module):
                     weight_loader(param, loaded_weight)
                 else:
                     logger.warning(f"Parameter {name} not found in params_dict")
+            if (
+                get_device_name() == "GAUDI2"
+                and get_tensor_model_parallel_world_size() == 2
+            ):
+                import habana_frameworks.torch as htorch
+
+                htorch.core.mark_step()
 
     def get_weights_by_name(
         self, name: str, truncate_size: int = 100, tp_size: int = 1

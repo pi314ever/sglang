@@ -215,6 +215,11 @@ class ModelRunner:
             self.mem_fraction_static = 0.6586
             self.server_args.mem_fraction_static = 0.6586
 
+        if get_device_name() == "GAUDI2" and self.server_args.tp_size == 2:
+            hpu_utils.DECODE_BLOCK_BUCKET_MAX = 768
+            self.mem_fraction_static = 0.91
+            self.server_args.mem_fraction_static = 0.91
+
         # Model-specific adjustment
         self.model_specific_adjustment()
 
