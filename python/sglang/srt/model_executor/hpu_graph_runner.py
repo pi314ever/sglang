@@ -45,6 +45,8 @@ if _is_hpu:
     # Temporarily disabled due to accuracy issue in feature
     os.environ["VLLM_FUSED_BLOCK_SOFTMAX_ADJUSTMENT"] = "false"
 
+    from vllm_hpu_extension.profiler import HabanaMemoryProfiler, format_bytes
+
     from sglang.srt import hpu_utils
     from sglang.srt.hpu_utils import (
         PREFILL_BUCKET_STEP,
@@ -674,8 +676,11 @@ class HPUGraphRunner:
 
         # decode
         if self.model_runner.is_generation:
+            max_block = int(
+                self.model_runner.max_total_num_tokens // self.model_runner.page_size
+            )
             time_start = time.perf_counter()
-            all_buckets = get_decode_all_buckets()
+            all_buckets = get_decode_all_buckets(max_block)
             for batch_size, seq_len in all_buckets:
                 self.capture_decode(batch_size, seq_len)
                 self.seen_configs.add(("decode", batch_size, seq_len))
@@ -683,8 +688,9 @@ class HPUGraphRunner:
             logger.info(f"Capture decode time: {time_end - time_start} seconds")
 
     def capture_prefill(self, prefix_len, prompt_len):
+        free_mem = format_bytes(HabanaMemoryProfiler.current_free_device_memory())
         logger.info(
-            f"Capture prefill with prefix_len: {prefix_len} and prompt_len: {prompt_len}"
+            f"Capture prefill with prefix_len: {prefix_len} and prompt_len: {prompt_len}, free_mem: {free_mem}"
         )
         forward_batch = create_hpu_dummy_batch_prefill(
             prefix_len,
@@ -698,14 +704,17 @@ class HPUGraphRunner:
         )
 
         self.model_runner.attn_backend.init_forward_metadata(forward_batch)
+        torch.hpu.synchronize()
         for i in range(3):
             self.model.forward(
                 forward_batch.input_ids, forward_batch.positions, forward_batch
             )
+        torch.hpu.synchronize()
 
     def capture_decode(self, batch_size, block_num):
+        free_mem = format_bytes(HabanaMemoryProfiler.current_free_device_memory())
         logger.info(
-            f"Capture decode with batch_size: {batch_size} and block_num: {block_num}"
+            f"Capture decode with batch_size: {batch_size} and block_num: {block_num}, free_mem: {free_mem}"
         )
         page_size = self.model_runner.token_to_kv_pool_allocator.page_size
         forward_batch = create_hpu_dummy_batch_decode(
@@ -718,10 +727,12 @@ class HPUGraphRunner:
             disable_prefix_cache=self.model_runner.server_args.disable_radix_cache,
         )
         self.model_runner.attn_backend.init_forward_metadata(forward_batch)
+        torch.hpu.synchronize()
         for i in range(3):
             self.model.forward(
                 forward_batch.input_ids, forward_batch.positions, forward_batch
             )
+        torch.hpu.synchronize()
 
     def _check_config(self, bucket_info):
         seen = bucket_info in self.seen_configs

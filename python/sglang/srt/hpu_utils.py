@@ -35,7 +35,9 @@ class HPUBlockMetadata:
     block_groups: Optional[torch.Tensor] = None
     block_usage: Optional[torch.Tensor] = None
 
-    def init_block_metadata(self, block_tables, slot_mapping, block_size, batch_size):
+    def init_block_metadata(
+        self, block_tables, slot_mapping, block_size, batch_size, max_total_num_tokens
+    ):
         """Initialize block metadata for HPU paged attention."""
         device = "cpu"
 
@@ -53,6 +55,8 @@ class HPUBlockMetadata:
         assert len(block_list) == len(block_groups)
         assert len(block_list) == len(block_usage)
 
+        max_block = int(max_total_num_tokens // block_size)
+
         if self.use_contiguous_pa:
             # Pad block metadata if needed
             block_bucket_size = max(max(block_list) + 1, len(block_list))
@@ -67,6 +71,8 @@ class HPUBlockMetadata:
             indices = [None] * block_bucket_size
             for i, bid in enumerate(block_list):
                 indices[bid] = i
+            if len(indices) > max_block:
+                indices = indices[:max_block]
             padding_fn = lambda tensor, pad_value: gather_list(
                 tensor, indices, pad_value
             )
@@ -79,6 +85,8 @@ class HPUBlockMetadata:
                     DECODE_BLOCK_BUCKET_MAX,
                 ),
             )
+            if block_bucket_size > max_block:
+                block_bucket_size = max_block
             padding_fn = lambda tensor, pad_value: pad_list(
                 tensor, block_bucket_size, pad_value
             )
@@ -201,7 +209,7 @@ if _is_hpu:
             )
         )
 
-    def get_decode_all_buckets():
+    def get_decode_all_buckets(max_block):
         buckets = []
         for batch_size in get_decode_all_batch_buckets():
             for seq_len in get_decode_all_seq_len_buckets():
@@ -212,6 +220,9 @@ if _is_hpu:
                     > DECODE_BLOCK_BUCKET_MAX // DECODE_BATCH_BUCKET_MAX
                 ):
                     continue
+                elif seq_len >= max_block:
+                    buckets.append((batch_size, max_block))
+                    break
                 else:
                     buckets.append((batch_size, seq_len))
         return buckets
@@ -282,7 +293,11 @@ if _is_hpu:
         )
 
     def create_hpu_block_metadata(
-        worker_batch, page_size, req_token_pool, disable_prefix_cache=False
+        worker_batch,
+        page_size,
+        req_token_pool,
+        max_total_num_tokens,
+        disable_prefix_cache=False,
     ):
         hpu_metadata = HPUBlockMetadata()
         if worker_batch.forward_mode.is_decode():
@@ -322,7 +337,11 @@ if _is_hpu:
                 use_contiguous_pa=USE_CONTIGUOUS_PA and disable_prefix_cache
             )
             hpu_metadata.init_block_metadata(
-                block_tables, slot_mapping, page_size, padded_batch_size
+                block_tables,
+                slot_mapping,
+                page_size,
+                padded_batch_size,
+                max_total_num_tokens,
             )
         else:
             batch_size = len(worker_batch.extend_seq_lens)
