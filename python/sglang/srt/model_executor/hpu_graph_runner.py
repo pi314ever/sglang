@@ -20,7 +20,7 @@ import os
 import time
 from collections import namedtuple
 from contextlib import contextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import torch
@@ -92,6 +92,7 @@ HPUForwardBatchBase = namedtuple(
         "use_contiguous_pa",
         "mm_inputs",
         "lora_paths",
+        "bucket_info",
         "top_logprobs_nums",
         "token_ids_logprobs",
         "extend_prefix_lens_cpu",
@@ -111,6 +112,7 @@ HPUForwardBatchBase = namedtuple(
         "capture_hidden_mode",
     ],
     defaults=[
+        None,  # bucket_info
         None,  # top_logprobs_nums
         None,  # token_ids_logprobs
         None,  # extend_prefix_lens_cpu
@@ -318,6 +320,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
             if forward_batch.hpu_metadata is None
             else forward_batch.hpu_metadata.use_contiguous_pa
         )
+        bucket_info = ("prefill", int(max_prefix_len), int(max_prompt_len))
     else:
         lora_paths_padded = forward_batch.lora_paths
         padded_batch_size = get_decode_batch_bucket(batch_size)
@@ -345,6 +348,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         block_groups = forward_batch.hpu_metadata.block_groups.to("hpu")
         block_usage = forward_batch.hpu_metadata.block_usage.to("hpu")
         use_contiguous_pa = forward_batch.hpu_metadata.use_contiguous_pa
+        bucket_info = ("decode", int(batch_size), len(block_list))
 
         extend_prefix_lens_hpu_padded = None
         extend_seq_lens_hpu_padded = None
@@ -381,6 +385,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         use_contiguous_pa=use_contiguous_pa,
         mm_inputs=mm_inputs,
         lora_paths=lora_paths_padded,
+        bucket_info=bucket_info,
         return_logprob=forward_batch.return_logprob,
         top_logprobs_nums=forward_batch.top_logprobs_nums,
         token_ids_logprobs=forward_batch.token_ids_logprobs,
@@ -584,6 +589,7 @@ class HPUGraphRunner:
             logger.info("Running on Eager mode.")
 
         # Capture
+        self.seen_configs: set = set()
         if not SKIP_WARMUP:
             try:
                 with self.model_capture_mode(), torch._dynamo.utils.disable_cache_limit():
@@ -662,6 +668,7 @@ class HPUGraphRunner:
                 if prefix_len + prompt_len > max_prefill_tokens + prefill_step:
                     continue
                 self.capture_prefill(prefix_len, prompt_len)
+                self.seen_configs.add(("prefill", prefix_len, prompt_len))
         time_end = time.perf_counter()
         logger.info(f"Capture prefill time: {time_end - time_start} seconds")
 
@@ -671,6 +678,7 @@ class HPUGraphRunner:
             all_buckets = get_decode_all_buckets()
             for batch_size, seq_len in all_buckets:
                 self.capture_decode(batch_size, seq_len)
+                self.seen_configs.add(("decode", batch_size, seq_len))
             time_end = time.perf_counter()
             logger.info(f"Capture decode time: {time_end - time_start} seconds")
 
@@ -715,10 +723,17 @@ class HPUGraphRunner:
                 forward_batch.input_ids, forward_batch.positions, forward_batch
             )
 
+    def _check_config(self, bucket_info):
+        seen = bucket_info in self.seen_configs
+        self.seen_configs.add(bucket_info)
+        if not seen:
+            logger.warning("Configuration: %s was not warmed-up!", bucket_info)
+
     def _forward(self, forward_batch: ForwardBatch):
         import habana_frameworks.torch as htorch
 
         forward_batch_hpu = create_hpu_forward_batch(forward_batch, self.model_runner)
+        self._check_config(forward_batch_hpu.bucket_info)
         # Init lora information
         if self.model_runner.server_args.lora_paths is not None:
             self.model_runner.lora_manager.prepare_lora_batch(forward_batch_hpu)
