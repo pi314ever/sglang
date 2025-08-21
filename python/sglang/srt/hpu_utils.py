@@ -145,6 +145,8 @@ if _is_hpu:
     USE_CONTIGUOUS_PA = get_bool_env_var("SGLANG_HPU_USE_CONTIGUOUS_PA", "true")
     SKIP_WARMUP = get_bool_env_var("SGLANG_HPU_SKIP_WARMUP", "false")
 
+    MAX_GRAPHS_NUM = get_int_env_var("SGLANG_HPU_MAX_GRAPHS_NUM", -1)
+
     from typing import TypeVar, Union
 
     from vllm_hpu_extension.bucketing.linear import find_bucket

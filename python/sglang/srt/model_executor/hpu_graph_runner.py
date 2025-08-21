@@ -36,7 +36,7 @@ from sglang.srt.model_executor.forward_batch_info import (
     ForwardBatch,
     ForwardMode,
 )
-from sglang.srt.utils import get_device_name, is_hpu
+from sglang.srt.utils import get_device_name, is_hpu, log_info_on_rank0
 
 _is_hpu = is_hpu()
 if _is_hpu:
@@ -49,6 +49,7 @@ if _is_hpu:
 
     from sglang.srt import hpu_utils
     from sglang.srt.hpu_utils import (
+        MAX_GRAPHS_NUM,
         PREFILL_BUCKET_STEP,
         SKIP_WARMUP,
         USE_CONTIGUOUS_PA,
@@ -153,6 +154,33 @@ class HPUForwardBatch(HPUForwardBatchBase):
 
     def merge_mm_inputs(self):
         return self.mm_inputs[0]
+
+    def debug_str(self):
+        lines = []
+        for name, value in self._asdict().items():
+            if isinstance(value, torch.Tensor):
+                lines.append(
+                    f"{name:<40} "
+                    f"shape={tuple(value.shape)}, dtype={value.dtype}, device={value.device}"
+                )
+            elif isinstance(value, (list, tuple)):
+                is_tensors = False
+
+                # print tensors info
+                for idx, v in enumerate(value):
+                    if isinstance(v, torch.Tensor):
+                        lines.append(
+                            f"{name}[{idx}]:{' '*(38-len(name)-len(str(idx)))} "
+                            f"shape={tuple(v.shape)}, dtype={v.dtype}, device={value.device}"
+                        )
+                        is_tensors = True
+
+                # print none tensors info
+                if not is_tensors:
+                    lines.append(f"{name:<40} value={str(value)}")
+            else:
+                lines.append(f"{name:<40} value={str(value)}")
+        return "\n".join(lines)
 
 
 def set_hpu_torch_compile_config():
@@ -296,6 +324,14 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         extend_seq_lens_hpu_padded = to_hpu_and_pad_1d(
             extend_seq_lens_hpu, max_prefill_seqs - batch_size
         )
+        extend_prefix_lens_hpu = torch.tensor(
+            forward_batch.extend_prefix_lens_cpu, device="hpu", dtype=torch.int32
+        )
+        extend_prefix_lens_hpu_padded = to_hpu_and_pad_1d(
+            extend_prefix_lens_hpu, max_prefill_seqs - batch_size
+        )
+        extend_prefix_lens_cpu_padded = extend_prefix_lens_hpu_padded.tolist()
+
         extend_logprob_start_lens_hpu = torch.tensor(
             forward_batch.extend_logprob_start_lens_cpu, device="hpu", dtype=torch.int32
         )
@@ -303,12 +339,12 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
             extend_logprob_start_lens_hpu, max_prefill_seqs - batch_size
         )
         extend_seq_lens_padded[batch_size] = padding_len
-        lora_paths_padded = forward_batch.lora_paths
-        lora_paths_padded += [None for i in range(batch_size - len(lora_paths_padded))]
         out_cache_loc = to_hpu_and_pad_1d(forward_batch.out_cache_loc, padding_len)
         batch_size = extend_seq_lens_padded.shape[
             0
         ]  # Align BS to align with padding done to extend_seq_lens
+        lora_paths_padded = forward_batch.lora_paths
+        lora_paths_padded += [None for i in range(batch_size - len(lora_paths_padded))]
         block_list = (
             None
             if forward_batch.hpu_metadata is None
@@ -324,7 +360,6 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         )
         bucket_info = ("prefill", int(max_prefix_len), int(max_prompt_len))
     else:
-        lora_paths_padded = forward_batch.lora_paths
         padded_batch_size = get_decode_batch_bucket(batch_size)
         padding_len = padded_batch_size - batch_size
         input_ids = to_hpu_and_pad_1d(
@@ -336,6 +371,8 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         valid_seq_len = torch.ones(padded_batch_size, dtype=torch.int64, device="hpu")
         out_cache_loc = to_hpu_and_pad_1d(forward_batch.out_cache_loc, padding_len)
         batch_size = padded_batch_size
+        lora_paths_padded = forward_batch.lora_paths
+        lora_paths_padded += [None for i in range(batch_size - len(lora_paths_padded))]
         attn_bias = compute_hpu_attn_bias_decode(
             page_size, forward_batch.hpu_metadata.block_usage, model_runner.dtype
         )
@@ -353,6 +390,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         bucket_info = ("decode", int(batch_size), len(block_list))
 
         extend_prefix_lens_hpu_padded = None
+        extend_prefix_lens_cpu_padded = None
         extend_seq_lens_hpu_padded = None
         extend_logprob_start_lens_hpu_padded = None
 
@@ -391,7 +429,7 @@ def create_hpu_forward_batch(forward_batch: ForwardBatch, model_runner: ModelRun
         return_logprob=forward_batch.return_logprob,
         top_logprobs_nums=forward_batch.top_logprobs_nums,
         token_ids_logprobs=forward_batch.token_ids_logprobs,
-        extend_prefix_lens_cpu=forward_batch.extend_prefix_lens_cpu,
+        extend_prefix_lens_cpu=extend_prefix_lens_cpu_padded,
         extend_seq_lens_cpu=extend_seq_lens_hpu_padded,
         extend_logprob_start_lens_cpu=extend_logprob_start_lens_hpu_padded,
         extend_input_logprob_token_ids_gpu=forward_batch.extend_input_logprob_token_ids_gpu,
@@ -421,7 +459,7 @@ def create_hpu_dummy_batch_prefill(
     )
     return HPUForwardBatch(
         forward_mode=ForwardMode.EXTEND,
-        batch_size=1,
+        batch_size=max_running_requests,
         input_ids=torch.zeros(prompt_len, dtype=torch.int64, device="hpu"),
         out_cache_loc=torch.arange(prompt_len, dtype=torch.int64, device="hpu"),
         positions=torch.zeros(prompt_len, dtype=torch.int64, device="hpu"),
@@ -432,7 +470,7 @@ def create_hpu_dummy_batch_prefill(
         kv_seq_idx=torch.zeros(1, seq_len, dtype=torch.int64, device="hpu"),
         valid_seq_len=torch.ones((), dtype=torch.int64, device="hpu"),
         extend_seq_lens=extend_seq_lens,
-        extend_seq_lens_cpu=extend_seq_lens.tolist(),
+        extend_seq_lens_cpu=extend_seq_lens,
         extend_prefix_lens_cpu=extend_prefix_lens.tolist(),
         extend_logprob_start_lens_cpu=torch.ones(
             max_running_requests,
@@ -450,7 +488,7 @@ def create_hpu_dummy_batch_prefill(
         token_to_kv_pool=token_to_kv_pool,
         use_contiguous_pa=USE_CONTIGUOUS_PA and disable_prefix_cache,
         mm_inputs=None,
-        lora_paths=None,
+        lora_paths=[None] * max_running_requests,
     )
 
 
@@ -485,7 +523,7 @@ def create_hpu_dummy_batch_decode(
         token_to_kv_pool=token_to_kv_pool,
         use_contiguous_pa=USE_CONTIGUOUS_PA and disable_prefix_cache,
         mm_inputs=None,
-        lora_paths=None,
+        lora_paths=[None] * batch_size,
     )
 
 
@@ -563,8 +601,12 @@ class HPUGraphRunner:
                             self.model.model.language_model, disable_tensor_cache=True
                         )
                 else:
+                    # We can use SGLANG_HPU_MAX_GRAPHS_NUM env var to limit the
+                    # hpu graph number to reduce memory pressure. By default,
+                    # the env var is -1 to not limit the hpu graph number
+                    max_graphs_num = None if MAX_GRAPHS_NUM < 0 else MAX_GRAPHS_NUM
                     self.model = htorch.hpu.wrap_in_hpu_graph(
-                        self.model, disable_tensor_cache=True
+                        self.model, disable_tensor_cache=True, max_graphs=max_graphs_num
                     )
         elif self.model_runner.server_args.enable_torch_compile:
             set_hpu_torch_compile_config()

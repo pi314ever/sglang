@@ -176,6 +176,10 @@ class ModelRunner:
         req_to_token_pool: Optional[ReqToTokenPool] = None,
         token_to_kv_pool_allocator: Optional[BaseTokenToKVPoolAllocator] = None,
     ):
+        # The hl_logger needs ID to create per device log folder, and ID needs
+        # to be set before any torch hpu specific API calls
+        os.environ["ID"] = str(gpu_id)
+
         # Parse args
         self.mem_fraction_static = mem_fraction_static
         self.device = server_args.device
@@ -503,9 +507,6 @@ class ModelRunner:
 
     def init_torch_distributed(self):
         logger.info("Init torch distributed begin.")
-
-        # hl_logger needs ID to create per device log folder
-        os.environ["ID"] = str(self.gpu_id)
 
         try:
             torch.get_device_module(self.device).set_device(self.gpu_id)
