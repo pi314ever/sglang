@@ -42,9 +42,6 @@ _is_hpu = is_hpu()
 if _is_hpu:
     os.environ["PT_HPU_ENABLE_LAZY_COLLECTIVES"] = "true"
 
-    # Temporarily disabled due to accuracy issue in feature
-    os.environ["VLLM_FUSED_BLOCK_SOFTMAX_ADJUSTMENT"] = "false"
-
     from vllm_hpu_extension.profiler import HabanaMemoryProfiler, format_bytes
 
     from sglang.srt import hpu_utils

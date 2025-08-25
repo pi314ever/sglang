@@ -93,7 +93,7 @@ srt_hpu = ["sglang[runtime_common]",
            "einops",
            "triton==3.1.0",
            "partial_json_parser",
-           "vllm-hpu-extension @ git+https://github.com/HabanaAI/vllm-hpu-extension.git@5ec69cfcf792ee489b9371656ae03a5e462548e5"]
+           "vllm-hpu-extension @ git+https://github.com/HabanaAI/vllm-hpu-extension.git@1b642c3cba129ec7d8bebac20726685b5238cd3c"]
 
 
 # CPU: torch wheel for CPU needs to be installed from https://download.pytorch.org/whl/cpu

@@ -256,9 +256,6 @@ if _is_hpu:
         block_mapping = torch.nn.functional.one_hot(
             block_mapping, num_classes=batch_size
         )
-        oob_values = block_groups.lt(0)
-        block_mapping.masked_fill_(oob_values.unsqueeze(-1), 0)
-        block_groups.masked_fill_(oob_values, batch_size)
         return block_mapping.to(torch.bfloat16), block_groups
 
     def get_prefill_prefix_seq_len_bucket(sum_prefix_len, page_size):
