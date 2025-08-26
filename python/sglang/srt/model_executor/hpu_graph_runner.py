@@ -486,6 +486,7 @@ def create_hpu_dummy_batch_prefill(
         use_contiguous_pa=USE_CONTIGUOUS_PA and disable_prefix_cache,
         mm_inputs=None,
         lora_paths=[None] * max_running_requests,
+        bucket_info=("prefill", int(prefix_len), int(prompt_len)),
     )
 
 
@@ -521,6 +522,7 @@ def create_hpu_dummy_batch_decode(
         use_contiguous_pa=USE_CONTIGUOUS_PA and disable_prefix_cache,
         mm_inputs=None,
         lora_paths=[None] * batch_size,
+        bucket_info=("decode", int(batch_size), int(block_num)),
     )
 
 
