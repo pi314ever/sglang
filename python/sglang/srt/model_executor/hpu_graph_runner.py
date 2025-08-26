@@ -568,11 +568,6 @@ class HPUGraphRunner:
         import habana_frameworks.torch as htorch
         import vllm_hpu_extension.environment as environment
 
-        # Temporary workaround to enable G2 testing
-        # TODO: Move settings to run.sh
-        if get_device_name() == "GAUDI2":
-            hpu_utils.DECODE_BLOCK_BUCKET_MAX = 2560
-
         environment._VLLM_VALUES["model_type"] = (
             model_runner.model_config.hf_config.model_type
         )

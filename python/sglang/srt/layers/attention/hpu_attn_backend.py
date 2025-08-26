@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 _is_hpu = is_hpu()
 if _is_hpu:
     import vllm_hpu_extension.ops as ops
-    from vllm_hpu_extension.utils import Matmul, ModuleFusedSDPA, Softmax
+    from vllm_hpu_extension.utils import FP8Matmul, Matmul, ModuleFusedSDPA, Softmax
 
 
 @torch.compiler.disable
@@ -40,6 +40,7 @@ def _process_kv_buffer_no_compile(
 ):
     """Helper function to set and get KV buffer without compilation."""
     if save_kv_cache:
+        # TODO Pass the real k_scale and v_scale if model had provided
         token_to_kv_pool.set_kv_buffer(layer, out_cache_loc, k, v)
 
     return (
@@ -53,14 +54,23 @@ class HPUAttnBackend(AttentionBackend):
         super().__init__()
         self.forward_metadata = None
         self.device = model_runner.device
+
+        self.kv_cache_dtype = model_runner.kv_cache_dtype
+        self.kv_cache_dtype_str = model_runner.server_args.kv_cache_dtype
+        self.enable_fp8_attn = self.kv_cache_dtype_str != "auto"
+        # TODO We currently use 1.0 for kv scales. Some models provide real kv
+        # scales, it would get better accuracy with using provided kv scales.
+        self.k_scale = 1.0
+        self.v_scale = 1.0
+
         from habana_frameworks.torch.hpex.kernels import FusedSDPA
 
         self.fused_scaled_dot_product_attention = ModuleFusedSDPA(FusedSDPA)
-        self.matmul_qk = Matmul()
+        self.matmul_qk = Matmul() if not self.enable_fp8_attn else FP8Matmul()
         self.softmax = Softmax()
-        self.matmul_av = Matmul()
-        self.batch2block_matmul = Matmul()
-        self.block2batch_matmul = Matmul()
+        self.matmul_av = Matmul() if not self.enable_fp8_attn else FP8Matmul()
+        self.batch2block_matmul = Matmul() if not self.enable_fp8_attn else FP8Matmul()
+        self.block2batch_matmul = Matmul() if not self.enable_fp8_attn else FP8Matmul()
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         pass
@@ -93,17 +103,41 @@ class HPUAttnBackend(AttentionBackend):
         if forward_batch.use_contiguous_pa:
 
             def fetch_key_cache(cache, blocks):
+                if self.enable_fp8_attn:
+                    out = cache[: blocks.size(0)]
+                    return torch.ops.hpu.cast_from_fp8(
+                        out, 1.0 / self.k_scale, torch.bfloat16
+                    )
+
                 return cache[: blocks.size(0)]
 
             def fetch_value_cache(cache, blocks):
+                if self.enable_fp8_attn:
+                    out = cache[: blocks.size(0)]
+                    return torch.ops.hpu.cast_from_fp8(
+                        out, 1.0 / self.v_scale, torch.bfloat16
+                    )
+
                 return cache[: blocks.size(0)]
 
         else:
 
             def fetch_key_cache(cache, blocks):
+                if self.enable_fp8_attn:
+                    out = cache.index_select(0, blocks.flatten())
+                    return torch.ops.hpu.cast_from_fp8(
+                        out, 1.0 / self.k_scale, torch.bfloat16
+                    )
+
                 return cache.index_select(0, blocks.flatten())
 
             def fetch_value_cache(cache, blocks):
+                if self.enable_fp8_attn:
+                    out = cache.index_select(0, blocks.flatten())
+                    return torch.ops.hpu.cast_from_fp8(
+                        out, 1.0 / self.v_scale, torch.bfloat16
+                    )
+
                 return cache.index_select(0, blocks.flatten())
 
         output = ops.prompt_attention(
@@ -162,17 +196,41 @@ class HPUAttnBackend(AttentionBackend):
         if forward_batch.use_contiguous_pa:
 
             def fetch_key_cache(cache, blocks):
+                if self.enable_fp8_attn:
+                    out = cache[: blocks.size(0)]
+                    return torch.ops.hpu.cast_from_fp8(
+                        out, 1.0 / self.k_scale, torch.bfloat16
+                    )
+
                 return cache[: blocks.size(0)]
 
             def fetch_value_cache(cache, blocks):
+                if self.enable_fp8_attn:
+                    out = cache[: blocks.size(0)]
+                    return torch.ops.hpu.cast_from_fp8(
+                        out, 1.0 / self.v_scale, torch.bfloat16
+                    )
+
                 return cache[: blocks.size(0)]
 
         else:
 
             def fetch_key_cache(cache, blocks):
+                if self.enable_fp8_attn:
+                    out = cache.index_select(0, blocks)
+                    return torch.ops.hpu.cast_from_fp8(
+                        out, 1.0 / self.k_scale, torch.bfloat16
+                    )
+
                 return cache.index_select(0, blocks)
 
             def fetch_value_cache(cache, blocks):
+                if self.enable_fp8_attn:
+                    out = cache.index_select(0, blocks)
+                    return torch.ops.hpu.cast_from_fp8(
+                        out, 1.0 / self.v_scale, torch.bfloat16
+                    )
+
                 return cache.index_select(0, blocks)
 
         # Run paged attention decode

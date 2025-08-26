@@ -119,7 +119,7 @@ class KVCache(abc.ABC):
         self.page_size = page_size
         self.dtype = dtype
         self.device = device
-        if dtype in (torch.float8_e5m2, torch.float8_e4m3fn):
+        if not _is_hpu and dtype in (torch.float8_e5m2, torch.float8_e4m3fn):
             # NOTE: Store as torch.uint8 because Tensor.index_put is not implemented for torch.float8_e5m2
             self.store_dtype = torch.uint8
         else:
@@ -918,6 +918,8 @@ class MLATokenToKVPool(KVCache):
     def get_kv_buffer(self, layer_id: int):
         return self.get_key_buffer(layer_id), self.get_value_buffer(layer_id)
 
+    # TODO Need to accept real k_scale and v_scale like MHATokenToKVPool, to get
+    # better accuracy
     def set_kv_buffer(
         self,
         layer: RadixAttention,
