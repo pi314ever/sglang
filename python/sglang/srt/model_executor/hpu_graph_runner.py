@@ -734,6 +734,7 @@ class HPUGraphRunner:
             time_end = time.perf_counter()
             logger.info(f"Capture decode time: {time_end - time_start} seconds")
 
+    @torch.inference_mode()
     def capture_prefill(self, prefix_len, prompt_len):
         free_mem = format_bytes(HabanaMemoryProfiler.current_free_device_memory())
         logger.info(
@@ -756,6 +757,7 @@ class HPUGraphRunner:
             self.model(forward_batch.input_ids, forward_batch.positions, forward_batch)
         torch.hpu.synchronize()
 
+    @torch.inference_mode()
     def capture_decode(self, batch_size, block_num):
         free_mem = format_bytes(HabanaMemoryProfiler.current_free_device_memory())
         logger.info(
@@ -783,6 +785,7 @@ class HPUGraphRunner:
         if not seen:
             logger.warning("Configuration: %s was not warmed-up!", bucket_info)
 
+    @torch.inference_mode()
     def _forward(self, forward_batch: ForwardBatch):
         import habana_frameworks.torch as htorch
 

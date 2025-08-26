@@ -1509,6 +1509,7 @@ class ModelRunner:
             **kwargs,
         )
 
+    @torch.inference_mode()
     def forward(
         self,
         forward_batch: ForwardBatch,
@@ -1581,6 +1582,7 @@ class ModelRunner:
             sampling_info.update_regex_vocab_mask()
         sampling_info.apply_logits_bias(logits_output.next_token_logits)
 
+    @torch.inference_mode()
     def sample(
         self,
         logits_output: LogitsProcessorOutput,
