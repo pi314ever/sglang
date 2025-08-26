@@ -534,6 +534,7 @@ class HPUAdapter:
     def __getattr__(self, name):
         return getattr(self.model, name)
 
+    # When wrap the HPUAdapter in hpu graph, only the forward() will be wrapped.
     def forward(self, *args, **kwargs):
         assert len(args) == 3, "Only three arguments are supported"
         input_batch = args[2]
@@ -550,7 +551,12 @@ class HPUAdapter:
         return self.model(*args, **kwargs)
 
     def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
+        output = self.forward(*args, **kwargs)
+        if hasattr(type(self.model), "compute_logits") and callable(
+            getattr(type(self.model), "compute_logits")
+        ):
+            return self.model.compute_logits(output, args[2])
+        return output
 
 
 class HPUGraphRunner:
@@ -747,9 +753,7 @@ class HPUGraphRunner:
         self.model_runner.attn_backend.init_forward_metadata(forward_batch)
         torch.hpu.synchronize()
         for i in range(3):
-            self.model.forward(
-                forward_batch.input_ids, forward_batch.positions, forward_batch
-            )
+            self.model(forward_batch.input_ids, forward_batch.positions, forward_batch)
         torch.hpu.synchronize()
 
     def capture_decode(self, batch_size, block_num):
@@ -770,9 +774,7 @@ class HPUGraphRunner:
         self.model_runner.attn_backend.init_forward_metadata(forward_batch)
         torch.hpu.synchronize()
         for i in range(3):
-            self.model.forward(
-                forward_batch.input_ids, forward_batch.positions, forward_batch
-            )
+            self.model(forward_batch.input_ids, forward_batch.positions, forward_batch)
         torch.hpu.synchronize()
 
     def _check_config(self, bucket_info):
@@ -789,7 +791,7 @@ class HPUGraphRunner:
         # Init lora information
         if self.model_runner.server_args.lora_paths is not None:
             self.model_runner.lora_manager.prepare_lora_batch(forward_batch_hpu)
-        results = self.model.forward(
+        results = self.model(
             forward_batch_hpu.input_ids, forward_batch_hpu.positions, forward_batch_hpu
         )
         htorch.core.mark_step()

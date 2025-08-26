@@ -1167,9 +1167,15 @@ class DeepseekV2AttentionMLA(nn.Module):
         k_pe = latent_cache[:, :, self.kv_lora_rank :]
         q_pe, k_pe = self.rotary_emb(positions, q_pe, k_pe)
         q[..., self.qk_nope_head_dim :] = q_pe
-        k = torch.empty_like(q)
-        k[..., : self.qk_nope_head_dim] = k_nope
-        k[..., self.qk_nope_head_dim :] = k_pe
+        if _is_hpu:
+            # Creating empty tensor in hpu graph scope will cause additional
+            # cached graph output and waste memory. So, on hpu, we use cat here.
+            k_pe_expand = k_pe.expand(-1, k_nope.shape[1], -1)
+            k = torch.cat([k_nope, k_pe_expand], dim=-1)
+        else:
+            k = torch.empty_like(q)
+            k[..., : self.qk_nope_head_dim] = k_nope
+            k[..., self.qk_nope_head_dim :] = k_pe
 
         latent_cache[:, :, : self.kv_lora_rank] = kv_a.unsqueeze(1)
         latent_cache[:, :, self.kv_lora_rank :] = k_pe
@@ -2139,10 +2145,15 @@ class DeepseekV2ForCausalLM(nn.Module):
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
         hidden_states = self.model(input_ids, positions, forward_batch, input_embeds)
+        return hidden_states
 
-        return self.logits_processor(
-            input_ids, hidden_states, self.lm_head, forward_batch
-        )
+    @torch.no_grad()
+    def compute_logits(
+        self,
+        hidden_states: torch.Tensor,
+        forward_batch: ForwardBatch,
+    ) -> torch.Tensor:
+        return self.logits_processor(None, hidden_states, self.lm_head, forward_batch)
 
     def post_load_weights(self, is_nextn=False, weight_names=None):
 
