@@ -1020,6 +1020,9 @@ def sample_random_requests(
     random_sample: bool = True,
     return_text: bool = True,
 ) -> List[DatasetRow]:
+    num_special_tokens = tokenizer.num_special_tokens_to_add()
+    input_len = input_len - num_special_tokens
+
     input_lens = np.random.randint(
         max(int(input_len * range_ratio), 1),
         input_len + 1,
