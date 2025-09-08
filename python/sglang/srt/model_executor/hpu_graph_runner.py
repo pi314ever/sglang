@@ -568,6 +568,9 @@ class HPUGraphRunner:
         import habana_frameworks.torch as htorch
         import vllm_hpu_extension.environment as environment
 
+        if "Llama-3.1-8B" in model_runner.model_config.model_path:
+            hpu_utils.PREFILL_BUCKET_STEP = 128
+
         environment._VLLM_VALUES["model_type"] = (
             model_runner.model_config.hf_config.model_type
         )
