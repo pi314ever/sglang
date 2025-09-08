@@ -214,7 +214,11 @@ class ModelRunner:
 
         self.forward_pass_id = 0
 
-        if get_device_name() == "GAUDI3" and self.server_args.tp_size == 2:
+        if (
+            get_device_name() == "GAUDI3"
+            and self.server_args.tp_size > 1
+            and "Llama-3.1-70B" in model_config.model_path
+        ):
             hpu_utils.DECODE_BLOCK_BUCKET_MAX = 896
             self.mem_fraction_static = 0.6586
             self.server_args.mem_fraction_static = 0.6586
