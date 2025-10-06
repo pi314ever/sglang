@@ -860,10 +860,17 @@ class ModelRunner:
         named_tensors: List[Tuple[str, Union[torch.Tensor, "LocalSerializedTensor"]]],
         load_format: Optional[str] = None,
     ):
-        named_tensors = [
-            (name, _unwrap_tensor(tensor, tp_rank=self.tp_rank))
-            for name, tensor in named_tensors
-        ]
+        # FIXME: This doesn't work for Verl, maybe load from tmp in filesystem
+        resolved_named_tensors = []
+        for name, filenames in named_tensors:
+            tensor = torch.load(filenames[self.tp_rank]).to("xpu")
+            resolved_named_tensors.append((name, tensor))
+        named_tensors = resolved_named_tensors
+
+        # named_tensors = [
+        #     (name, _unwrap_tensor(tensor, tp_rank=self.tp_rank))
+        #     for name, tensor in named_tensors
+        # ]
         if load_format == "direct":
             _model_load_weights_direct(self.model, named_tensors)
         elif load_format in self.server_args.custom_weight_loader:
@@ -1753,9 +1760,9 @@ def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tenso
 
 def _unwrap_tensor(tensor, tp_rank):
     if isinstance(tensor, LocalSerializedTensor):
-        monkey_patch_torch_reductions()
+        # monkey_patch_torch_reductions()
         tensor = tensor.get(tp_rank)
-    return tensor.to(torch.cuda.current_device())
+    return tensor.to(torch.xpu.current_device())
 
 
 @dataclass

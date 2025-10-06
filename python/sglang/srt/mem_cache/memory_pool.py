@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 GB = 1024 * 1024 * 1024
 _is_cuda = is_cuda()
 _is_npu = is_npu()
-if not _is_npu:
+if _is_cuda:
     from sgl_kernel.kvcacheio import transfer_kv_per_layer, transfer_kv_per_layer_mla
 
 

@@ -25,6 +25,7 @@ class TorchMemorySaverAdapter(ABC):
                 "torch-memory-saver is not installed. Please install it "
                 "via `pip3 install torch-memory-saver`. "
             )
+            return _TorchMemorySaverAdapterNoop()
             raise import_error
         return (
             _TorchMemorySaverAdapterReal() if enable else _TorchMemorySaverAdapterNoop()

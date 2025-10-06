@@ -10,6 +10,12 @@ from sglang.srt.managers.tokenizer_manager import UpdateWeightsFromTensorReqInpu
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from sglang.srt.utils import MultiprocessingSerializer
 
+import multiprocessing as mp
+
+print(f"{mp.get_start_method()=}")
+print(f"{torch.multiprocessing.get_sharing_strategy()=}")
+import tempfile
+TMP_DIR = tempfile.TemporaryDirectory()
 
 async def update_weights(
     engine: Engine,
@@ -35,21 +41,31 @@ async def update_weights(
     infer_tp_rank = device_mesh[device_mesh_key].get_local_rank()
     from sglang.srt.patch_torch import monkey_patch_torch_reductions
 
-    monkey_patch_torch_reductions()
+    # monkey_patch_torch_reductions()
 
     # [
     #   (name0, ipc_tensor0_tp0),
     #   (name1, ipc_tensor1_tp0),
     # ]
-    named_tensors_batch = [
-        (
-            name,
-            MultiprocessingSerializer.serialize(
-                _preprocess_tensor_for_update_weights(tensor)
-            ),
-        )
-        for name, tensor in params_batch
-    ]
+    # print(f"Received tensors: {params_batch=}")
+    # FIXME: Implement tmp file save and extract
+    named_tensors_batch = []
+    print(f"Saving in {TMP_DIR=}")
+    for name, tensor in params_batch:
+        filename = f"{TMP_DIR.name}/{name}.pt"
+        tensor = _preprocess_tensor_for_update_weights(tensor.to("cpu"))
+        torch.save(tensor, filename)
+        named_tensors_batch.append((name, filename))
+
+    # named_tensors_batch = [
+    #     (
+    #         name,
+    #         MultiprocessingSerializer.serialize(
+    #             _preprocess_tensor_for_update_weights(tensor.to("cpu"))
+    #         ),
+    #     )
+    #     for name, tensor in params_batch
+    # ]
 
     if infer_tp_rank == 0:
         gathered_serialized_batches = [None for _ in range(infer_tp_size)]
@@ -83,9 +99,8 @@ async def update_weights(
             # ]
             (
                 tensor_group[0][0],
-                LocalSerializedTensor(
-                    values=[rank_part[1] for rank_part in tensor_group]
-                ),
+                [rank_part[1] for rank_part in tensor_group]
+                ,
             )
             for tensor_group in logical_tensors
         ]
