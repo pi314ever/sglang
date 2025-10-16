@@ -10,12 +10,9 @@ from sglang.srt.managers.tokenizer_manager import UpdateWeightsFromTensorReqInpu
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from sglang.srt.utils import MultiprocessingSerializer
 
-import multiprocessing as mp
-
-print(f"{mp.get_start_method()=}")
-print(f"{torch.multiprocessing.get_sharing_strategy()=}")
 import tempfile
 TMP_DIR = tempfile.TemporaryDirectory()
+print(f"Update weights via directory: {TMP_DIR}")
 
 async def update_weights(
     engine: Engine,
@@ -47,25 +44,12 @@ async def update_weights(
     #   (name0, ipc_tensor0_tp0),
     #   (name1, ipc_tensor1_tp0),
     # ]
-    # print(f"Received tensors: {params_batch=}")
-    # FIXME: Implement tmp file save and extract
     named_tensors_batch = []
-    print(f"Saving in {TMP_DIR=}")
     for name, tensor in params_batch:
         filename = f"{TMP_DIR.name}/{name}.pt"
-        tensor = _preprocess_tensor_for_update_weights(tensor.to("cpu"))
+        tensor = _preprocess_tensor_for_update_weights(tensor)
         torch.save(tensor, filename)
         named_tensors_batch.append((name, filename))
-
-    # named_tensors_batch = [
-    #     (
-    #         name,
-    #         MultiprocessingSerializer.serialize(
-    #             _preprocess_tensor_for_update_weights(tensor.to("cpu"))
-    #         ),
-    #     )
-    #     for name, tensor in params_batch
-    # ]
 
     if infer_tp_rank == 0:
         gathered_serialized_batches = [None for _ in range(infer_tp_size)]
